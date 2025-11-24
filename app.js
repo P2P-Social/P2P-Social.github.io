@@ -1,5 +1,5 @@
 // ============================================
-// P2P Social - Main Application
+// P2P Social - Working Version
 // ============================================
 
 // Firebase Configuration
@@ -26,15 +26,10 @@ const state = {
   displayName: null,
   peers: new Map(),
   posts: [],
-  mediaQueue: [],
-  localStream: null,
-  inCall: false,
-  micEnabled: true,
-  camEnabled: true,
-  aiMessages: []
+  mediaQueue: []
 };
 
-// WebRTC Configuration with TURN servers for NAT traversal
+// WebRTC Configuration with TURN servers
 const rtcConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -73,7 +68,7 @@ function generatePeerId() {
 }
 
 function getInitials(name) {
-  return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) || '?';
+  return name ? name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '?';
 }
 
 function getAvatarColor(str) {
@@ -88,7 +83,7 @@ function getAvatarColor(str) {
     'linear-gradient(135deg, #00bfff 0%, #00ff88 100%)'
   ];
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
+  for (let i = 0; i < (str || '').length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
   return colors[Math.abs(hash) % colors.length];
@@ -148,6 +143,12 @@ const signaling = {
     }, 10000);
   },
   
+  updateName() {
+    database.ref(`peers/${state.peerId}`).update({
+      displayName: state.displayName
+    });
+  },
+  
   async sendSignal(targetPeerId, type, data) {
     await database.ref(`signals/${targetPeerId}/${state.peerId}`).push({
       type,
@@ -186,8 +187,6 @@ const signaling = {
   listenForPeers() {
     database.ref('peers').on('value', (snapshot) => {
       const peers = snapshot.val() || {};
-      const peerList = document.getElementById('peerList');
-      peerList.innerHTML = '';
       
       let onlineCount = 0;
       
@@ -200,20 +199,9 @@ const signaling = {
         if (!state.peers.has(peerId)) {
           p2p.connectToPeer(peerId, info.displayName);
         }
-        
-        const peerEl = document.createElement('div');
-        peerEl.className = 'peer-item';
-        peerEl.innerHTML = `
-          <div class="peer-avatar" style="background: ${getAvatarColor(peerId)}">${getInitials(info.displayName)}</div>
-          <div class="peer-info">
-            <div class="peer-name">${info.displayName}</div>
-            <div class="peer-status">Connected</div>
-          </div>
-        `;
-        peerEl.onclick = () => startDirectMessage(peerId, info.displayName);
-        peerList.appendChild(peerEl);
       });
       
+      // Update peer count in header (Firebase-discovered peers)
       document.getElementById('peerCount').textContent = onlineCount;
     });
   }
@@ -236,17 +224,23 @@ const p2p = {
       connection: pc, 
       dataChannel, 
       info: { displayName },
-      iceCandidates: []
+      connected: false
     });
     
     this.setupDataChannel(dataChannel, peerId);
     this.setupConnectionHandlers(pc, peerId);
     
-    // Wait for ICE gathering to complete or timeout
+    // Wait for ICE candidates to gather
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
+      }
+    };
+    
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     
-    // Wait a moment for ICE candidates to gather
+    // Wait a bit for ICE gathering
     await new Promise(resolve => setTimeout(resolve, 500));
     
     await signaling.sendSignal(peerId, 'offer', {
@@ -261,12 +255,11 @@ const p2p = {
     // Check if we already have a connection attempt
     if (state.peers.has(peerId)) {
       const existing = state.peers.get(peerId);
-      // If existing connection is failed, close it and try again
       if (existing.connection.connectionState === 'failed') {
         existing.connection.close();
         state.peers.delete(peerId);
       } else {
-        return; // Already connecting/connected
+        return;
       }
     }
     
@@ -275,7 +268,7 @@ const p2p = {
       connection: pc, 
       dataChannel: null, 
       info: { displayName },
-      iceCandidates: []
+      connected: false
     });
     
     pc.ondatachannel = (event) => {
@@ -284,13 +277,18 @@ const p2p = {
       this.setupDataChannel(event.channel, peerId);
     };
     
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
+      }
+    };
+    
     this.setupConnectionHandlers(pc, peerId);
     
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     
-    // Wait a moment for ICE candidates to gather
     await new Promise(resolve => setTimeout(resolve, 500));
     
     await signaling.sendSignal(peerId, 'answer', {
@@ -313,32 +311,25 @@ const p2p = {
       try {
         await peer.connection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
-        console.warn('Error adding ICE candidate:', e);
+        // Ignore ICE errors - they're usually timing-related
       }
     }
   },
   
   setupConnectionHandlers(pc, peerId) {
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
-      }
-    };
-    
     pc.onconnectionstatechange = () => {
       console.log(`Connection state with ${peerId}:`, pc.connectionState);
+      
       if (pc.connectionState === 'connected') {
-        showToast(`Connected to peer`, 'success');
-        updateConnectionStatus('connected');
+        const peer = state.peers.get(peerId);
+        if (peer) peer.connected = true;
+        showToast('Peer connected!', 'success');
+        updateConnectionStatus();
+        updatePeerList();
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
         state.peers.delete(peerId);
-        updateConnectionStatus(state.peers.size > 0 ? 'connected' : 'connecting');
-      }
-    };
-    
-    pc.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        addRemoteVideo(peerId, event.streams[0]);
+        updateConnectionStatus();
+        updatePeerList();
       }
     };
   },
@@ -346,6 +337,8 @@ const p2p = {
   setupDataChannel(channel, peerId) {
     channel.onopen = () => {
       console.log('Data channel opened with:', peerId);
+      updateConnectionStatus();
+      updatePeerList();
       this.sendToPeer(peerId, { type: 'sync-request' });
     };
     
@@ -360,10 +353,47 @@ const p2p = {
     
     channel.onclose = () => {
       console.log('Data channel closed with:', peerId);
+      updateConnectionStatus();
+      updatePeerList();
     };
   },
   
+  // Chunked message storage
+  chunkedMessages: {},
+  
   handleMessage(fromPeerId, message) {
+    // Handle chunked messages
+    if (message.type === 'chunk') {
+      const { messageId, chunkIndex, totalChunks, data } = message;
+      
+      if (!this.chunkedMessages[messageId]) {
+        this.chunkedMessages[messageId] = {
+          chunks: new Array(totalChunks),
+          received: 0,
+          totalChunks
+        };
+      }
+      
+      const cm = this.chunkedMessages[messageId];
+      if (!cm.chunks[chunkIndex]) {
+        cm.chunks[chunkIndex] = data;
+        cm.received++;
+      }
+      
+      if (cm.received === cm.totalChunks) {
+        const fullMessageStr = cm.chunks.join('');
+        delete this.chunkedMessages[messageId];
+        
+        try {
+          const fullMessage = JSON.parse(fullMessageStr);
+          this.handleMessage(fromPeerId, fullMessage);
+        } catch (e) {
+          console.error('Error parsing reassembled message:', e);
+        }
+      }
+      return;
+    }
+    
     switch (message.type) {
       case 'post':
         addPost(message.data, false);
@@ -373,11 +403,12 @@ const p2p = {
           this.sendToPeer(fromPeerId, { type: 'post', data: post });
         });
         break;
-      case 'call-offer':
-        handleCallOffer(fromPeerId, message.data);
-        break;
-      case 'call-answer':
-        handleCallAnswer(fromPeerId, message.data);
+      case 'name-change':
+        const peer = state.peers.get(fromPeerId);
+        if (peer) {
+          peer.info.displayName = message.data.newName;
+          updatePeerList();
+        }
         break;
       default:
         console.log('Unknown message type:', message.type);
@@ -387,7 +418,8 @@ const p2p = {
   sendToPeer(peerId, message) {
     const peer = state.peers.get(peerId);
     if (peer && peer.dataChannel && peer.dataChannel.readyState === 'open') {
-      peer.dataChannel.send(JSON.stringify(message));
+      const messageStr = JSON.stringify(message);
+      this.sendChunked(peer.dataChannel, messageStr);
     }
   },
   
@@ -395,17 +427,31 @@ const p2p = {
     const messageStr = JSON.stringify(message);
     state.peers.forEach((peer, peerId) => {
       if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-        peer.dataChannel.send(messageStr);
+        this.sendChunked(peer.dataChannel, messageStr);
       }
     });
   },
   
-  addStreamToPeers(stream) {
-    state.peers.forEach((peer) => {
-      stream.getTracks().forEach(track => {
-        peer.connection.addTrack(track, stream);
-      });
-    });
+  sendChunked(channel, messageStr) {
+    const CHUNK_SIZE = 16000;
+    
+    if (messageStr.length > CHUNK_SIZE) {
+      const messageId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+      const totalChunks = Math.ceil(messageStr.length / CHUNK_SIZE);
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = messageStr.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        channel.send(JSON.stringify({
+          type: 'chunk',
+          messageId,
+          chunkIndex: i,
+          totalChunks,
+          data: chunk
+        }));
+      }
+    } else {
+      channel.send(messageStr);
+    }
   }
 };
 
@@ -413,24 +459,53 @@ const p2p = {
 // UI Updates
 // ============================================
 
-function updateConnectionStatus(status) {
+function updateConnectionStatus() {
   const dot = document.getElementById('connectionDot');
   const text = document.getElementById('connectionStatus');
   
+  // Count WebRTC-connected peers
+  let connectedCount = 0;
+  state.peers.forEach(peer => {
+    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+      connectedCount++;
+    }
+  });
+  
   dot.className = 'status-dot';
   
-  switch (status) {
-    case 'connected':
-      text.textContent = 'Connected';
-      break;
-    case 'connecting':
-      dot.classList.add('connecting');
-      text.textContent = 'Connecting...';
-      break;
-    case 'offline':
-      dot.classList.add('offline');
-      text.textContent = 'Offline';
-      break;
+  if (connectedCount > 0) {
+    dot.classList.add('connected');
+    text.textContent = 'Connected';
+  } else {
+    text.textContent = 'Searching...';
+  }
+}
+
+function updatePeerList() {
+  const peerList = document.getElementById('peerList');
+  peerList.innerHTML = '';
+  
+  let hasConnectedPeers = false;
+  
+  state.peers.forEach((peer, peerId) => {
+    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+      hasConnectedPeers = true;
+      
+      const peerEl = document.createElement('div');
+      peerEl.className = 'peer-item';
+      peerEl.innerHTML = `
+        <div class="peer-avatar" style="background: ${getAvatarColor(peerId)}">${getInitials(peer.info?.displayName)}</div>
+        <div class="peer-info">
+          <div class="peer-name">${peer.info?.displayName || 'Unknown'}</div>
+          <div class="peer-status">Connected</div>
+        </div>
+      `;
+      peerList.appendChild(peerEl);
+    }
+  });
+  
+  if (!hasConnectedPeers) {
+    peerList.innerHTML = '<div class="no-peers">No peers connected yet</div>';
   }
 }
 
@@ -449,13 +524,16 @@ function addPost(post, broadcast = true) {
   let mediaHtml = '';
   if (post.media && post.media.length > 0) {
     post.media.forEach(item => {
-      if (item.type.startsWith('image/')) {
+      if (item.type && item.type.startsWith('image/')) {
         mediaHtml += `<div class="post-media"><img src="${item.data}" alt="Post image"></div>`;
-      } else if (item.type.startsWith('video/')) {
-        mediaHtml += `<div class="post-media"><video src="${item.data}" controls></video></div>`;
+      } else if (item.type && item.type.startsWith('video/')) {
+        mediaHtml += `<div class="post-media"><video src="${item.data}" controls playsinline></video></div>`;
       }
     });
   }
+  
+  // Convert URLs to links
+  let content = escapeHtml(post.content);
   
   postEl.innerHTML = `
     <div class="post-header">
@@ -465,22 +543,8 @@ function addPost(post, broadcast = true) {
         <div class="post-time">${formatTime(post.timestamp)}</div>
       </div>
     </div>
-    <div class="post-content">${escapeHtml(post.content)}</div>
+    <div class="post-content">${content}</div>
     ${mediaHtml}
-    <div class="post-actions">
-      <button class="post-action" onclick="likePost('${post.id}')">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-        Like
-      </button>
-      <button class="post-action" onclick="replyToPost('${post.id}')">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z"/></svg>
-        Reply
-      </button>
-      <button class="post-action" onclick="sharePost('${post.id}')">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
-        Share
-      </button>
-    </div>
   `;
   
   feed.insertBefore(postEl, feed.firstChild);
@@ -493,243 +557,29 @@ function addPost(post, broadcast = true) {
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML.replace(/\n/g, '<br>');
-}
-
-function likePost(postId) {
-  showToast('Liked!', 'success');
-}
-
-function replyToPost(postId) {
-  const post = state.posts.find(p => p.id === postId);
-  if (post) {
-    document.getElementById('postInput').value = `@${post.author} `;
-    document.getElementById('postInput').focus();
-  }
-}
-
-function sharePost(postId) {
-  const post = state.posts.find(p => p.id === postId);
-  if (post) {
-    navigator.clipboard.writeText(post.content).then(() => {
-      showToast('Copied to clipboard!', 'success');
-    });
-  }
-}
-
-function startDirectMessage(peerId, displayName) {
-  showToast(`Opening chat with ${displayName}...`);
-}
-
-// ============================================
-// Video Calling
-// ============================================
-
-async function startVideoCall() {
-  try {
-    state.localStream = await navigator.mediaDevices.getUserMedia({
-      video: true,
-      audio: true
-    });
-    
-    const localVideo = document.getElementById('localVideo');
-    localVideo.srcObject = state.localStream;
-    
-    p2p.addStreamToPeers(state.localStream);
-    
-    state.inCall = true;
-    document.getElementById('startCallBtn').textContent = 'In Call';
-    document.getElementById('startCallBtn').disabled = true;
-    
-    showToast('Video call started', 'success');
-  } catch (err) {
-    console.error('Error accessing media devices:', err);
-    showToast('Could not access camera/microphone', 'error');
-  }
-}
-
-function addRemoteVideo(peerId, stream) {
-  const videoGrid = document.getElementById('videoGrid');
+  let html = div.innerHTML;
   
-  if (document.getElementById(`video-${peerId}`)) return;
+  // Convert URLs to clickable links
+  const urlRegex = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g;
+  html = html.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
   
-  const peer = state.peers.get(peerId);
-  const displayName = peer?.info?.displayName || 'Peer';
+  // Convert newlines
+  html = html.replace(/\n/g, '<br>');
   
-  const container = document.createElement('div');
-  container.className = 'video-container';
-  container.id = `video-${peerId}`;
-  container.innerHTML = `
-    <video autoplay playsinline></video>
-    <span class="video-label">${displayName}</span>
-  `;
-  
-  container.querySelector('video').srcObject = stream;
-  videoGrid.appendChild(container);
+  return html;
 }
-
-function toggleMic() {
-  if (state.localStream) {
-    state.micEnabled = !state.micEnabled;
-    state.localStream.getAudioTracks().forEach(track => {
-      track.enabled = state.micEnabled;
-    });
-    document.getElementById('toggleMicBtn').classList.toggle('active', !state.micEnabled);
-  }
-}
-
-function toggleCam() {
-  if (state.localStream) {
-    state.camEnabled = !state.camEnabled;
-    state.localStream.getVideoTracks().forEach(track => {
-      track.enabled = state.camEnabled;
-    });
-    document.getElementById('toggleCamBtn').classList.toggle('active', !state.camEnabled);
-  }
-}
-
-async function shareScreen() {
-  try {
-    const screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true
-    });
-    
-    const videoTrack = screenStream.getVideoTracks()[0];
-    
-    state.peers.forEach((peer) => {
-      const sender = peer.connection.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) {
-        sender.replaceTrack(videoTrack);
-      }
-    });
-    
-    const localVideo = document.getElementById('localVideo');
-    localVideo.srcObject = screenStream;
-    
-    videoTrack.onended = () => {
-      if (state.localStream) {
-        const camTrack = state.localStream.getVideoTracks()[0];
-        state.peers.forEach((peer) => {
-          const sender = peer.connection.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) {
-            sender.replaceTrack(camTrack);
-          }
-        });
-        localVideo.srcObject = state.localStream;
-      }
-    };
-    
-    showToast('Screen sharing started', 'success');
-  } catch (err) {
-    console.error('Error sharing screen:', err);
-    showToast('Could not share screen', 'error');
-  }
-}
-
-function endCall() {
-  if (state.localStream) {
-    state.localStream.getTracks().forEach(track => track.stop());
-    state.localStream = null;
-  }
-  
-  state.inCall = false;
-  document.getElementById('startCallBtn').textContent = 'Start Video Call';
-  document.getElementById('startCallBtn').disabled = false;
-  document.getElementById('localVideo').srcObject = null;
-  
-  const videoGrid = document.getElementById('videoGrid');
-  videoGrid.querySelectorAll('.video-container:not(:first-child)').forEach(el => el.remove());
-  
-  showToast('Call ended');
-}
-
-// ============================================
-// AI Integration
-// ============================================
-
-const ai = {
-  async chat(message) {
-    this.addMessage(message, 'user');
-    
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 1024,
-          messages: [
-            ...state.aiMessages,
-            { role: 'user', content: message }
-          ],
-          system: `You are an AI assistant integrated into a peer-to-peer social network called P2P Social. 
-                   You can help users compose posts, answer questions about the network, suggest content ideas, 
-                   and assist with any other tasks. Keep responses concise and helpful.
-                   The network currently has ${state.peers.size} connected peers.`
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error('API request failed');
-      }
-      
-      const data = await response.json();
-      const reply = data.content[0].text;
-      
-      state.aiMessages.push({ role: 'user', content: message });
-      state.aiMessages.push({ role: 'assistant', content: reply });
-      
-      if (state.aiMessages.length > 20) {
-        state.aiMessages = state.aiMessages.slice(-20);
-      }
-      
-      this.addMessage(reply, 'assistant');
-      
-      return reply;
-    } catch (error) {
-      console.error('AI error:', error);
-      const fallbackResponse = this.getFallbackResponse(message);
-      this.addMessage(fallbackResponse, 'assistant');
-      return fallbackResponse;
-    }
-  },
-  
-  getFallbackResponse(message) {
-    const lowerMsg = message.toLowerCase();
-    
-    if (lowerMsg.includes('hello') || lowerMsg.includes('hi')) {
-      return `Hello! I'm here to help with the P2P Social network. You have ${state.peers.size} peers connected. What would you like to do?`;
-    }
-    if (lowerMsg.includes('post') || lowerMsg.includes('write')) {
-      return 'I can help you write a post! What topic would you like to write about?';
-    }
-    if (lowerMsg.includes('how') && lowerMsg.includes('work')) {
-      return 'P2P Social works by connecting your browser directly to other users via WebRTC. There are no central servers - your posts are shared directly between peers. This makes the network censorship-resistant!';
-    }
-    if (lowerMsg.includes('peers') || lowerMsg.includes('connected')) {
-      return `You currently have ${state.peers.size} peers connected to your node. The more peers, the more resilient the network becomes!`;
-    }
-    
-    return `I'm currently running in offline mode (API not configured). To enable full AI capabilities, add your Claude API key. I can still help with basic questions about the network!`;
-  },
-  
-  addMessage(content, role) {
-    const messagesEl = document.getElementById('aiMessages');
-    const messageEl = document.createElement('div');
-    messageEl.className = `ai-message ${role}`;
-    messageEl.innerHTML = `<div class="ai-message-content">${escapeHtml(content)}</div>`;
-    messagesEl.appendChild(messageEl);
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-};
 
 // ============================================
 // Event Handlers
 // ============================================
 
 function setupEventListeners() {
+  // Mobile menu
+  document.getElementById('mobileMenuBtn').onclick = () => {
+    document.getElementById('sidebar').classList.toggle('mobile-open');
+  };
+  
+  // Initial name modal
   document.getElementById('saveNameBtn').onclick = () => {
     const name = document.getElementById('nameInput').value.trim();
     if (name) {
@@ -746,6 +596,37 @@ function setupEventListeners() {
     }
   };
   
+  // Change name
+  document.getElementById('myProfile').onclick = () => {
+    document.getElementById('newNameInput').value = state.displayName;
+    document.getElementById('changeNameModal').classList.add('active');
+    document.getElementById('sidebar').classList.remove('mobile-open');
+  };
+  
+  document.getElementById('confirmNameBtn').onclick = () => {
+    const newName = document.getElementById('newNameInput').value.trim();
+    if (newName && newName !== state.displayName) {
+      state.displayName = newName;
+      localStorage.setItem('p2p-displayName', newName);
+      signaling.updateName();
+      p2p.broadcast({ type: 'name-change', data: { newName } });
+      updateUserUI();
+      showToast('Name updated!', 'success');
+    }
+    document.getElementById('changeNameModal').classList.remove('active');
+  };
+  
+  document.getElementById('cancelNameBtn').onclick = () => {
+    document.getElementById('changeNameModal').classList.remove('active');
+  };
+  
+  document.getElementById('newNameInput').onkeypress = (e) => {
+    if (e.key === 'Enter') {
+      document.getElementById('confirmNameBtn').click();
+    }
+  };
+  
+  // Post
   document.getElementById('postBtn').onclick = createPost;
   document.getElementById('postInput').onkeypress = (e) => {
     if (e.key === 'Enter' && e.ctrlKey) {
@@ -753,6 +634,7 @@ function setupEventListeners() {
     }
   };
   
+  // Media
   document.getElementById('addImageBtn').onclick = () => {
     document.getElementById('imageInput').click();
   };
@@ -763,46 +645,6 @@ function setupEventListeners() {
   
   document.getElementById('imageInput').onchange = handleMediaSelect;
   document.getElementById('videoInput').onchange = handleMediaSelect;
-  
-  document.getElementById('askAiBtn').onclick = () => {
-    const text = document.getElementById('postInput').value.trim();
-    if (text) {
-      ai.chat(`Help me improve this post: "${text}"`);
-    } else {
-      ai.chat('Give me an idea for an interesting post');
-    }
-  };
-  
-  document.getElementById('aiSendBtn').onclick = sendAiMessage;
-  document.getElementById('aiInput').onkeypress = (e) => {
-    if (e.key === 'Enter') {
-      sendAiMessage();
-    }
-  };
-  
-  document.querySelectorAll('.nav-item').forEach(item => {
-    item.onclick = () => {
-      document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-      item.classList.add('active');
-    };
-  });
-  
-  document.querySelectorAll('.panel-tab').forEach(tab => {
-    tab.onclick = () => {
-      document.querySelectorAll('.panel-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      
-      const panel = tab.dataset.panel;
-      document.getElementById('aiPanel').style.display = panel === 'ai' ? 'flex' : 'none';
-      document.getElementById('callPanel').style.display = panel === 'call' ? 'block' : 'none';
-    };
-  });
-  
-  document.getElementById('startCallBtn').onclick = startVideoCall;
-  document.getElementById('toggleMicBtn').onclick = toggleMic;
-  document.getElementById('toggleCamBtn').onclick = toggleCam;
-  document.getElementById('shareScreenBtn').onclick = shareScreen;
-  document.getElementById('endCallBtn').onclick = endCall;
 }
 
 async function createPost() {
@@ -826,7 +668,7 @@ async function createPost() {
   state.mediaQueue = [];
   document.getElementById('mediaPreview').innerHTML = '';
   
-  showToast('Posted to network!', 'success');
+  showToast('Posted!', 'success');
 }
 
 async function handleMediaSelect(event) {
@@ -834,9 +676,13 @@ async function handleMediaSelect(event) {
   const preview = document.getElementById('mediaPreview');
   
   for (const file of files) {
-    if (file.size > 5 * 1024 * 1024) {
-      showToast('File too large (max 5MB)', 'error');
+    if (file.size > 25 * 1024 * 1024) {
+      showToast('File too large (max 25MB)', 'error');
       continue;
+    }
+    
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Processing large file...', 'info');
     }
     
     const data = await fileToBase64(file);
@@ -867,13 +713,13 @@ async function handleMediaSelect(event) {
   event.target.value = '';
 }
 
-function sendAiMessage() {
-  const input = document.getElementById('aiInput');
-  const message = input.value.trim();
-  if (message) {
-    ai.chat(message);
-    input.value = '';
-  }
+function updateUserUI() {
+  const initials = getInitials(state.displayName);
+  document.getElementById('myAvatar').textContent = initials;
+  document.getElementById('myAvatar').style.background = getAvatarColor(state.peerId);
+  document.getElementById('myName').textContent = state.displayName;
+  document.getElementById('composerAvatar').textContent = initials;
+  document.getElementById('composerAvatar').style.background = getAvatarColor(state.peerId);
 }
 
 // ============================================
@@ -881,20 +727,20 @@ function sendAiMessage() {
 // ============================================
 
 function initializeNetwork() {
-  const initials = getInitials(state.displayName);
-  document.getElementById('myAvatar').textContent = initials;
-  document.getElementById('myAvatar').style.background = getAvatarColor(state.peerId);
-  document.getElementById('myPeerId').textContent = state.displayName;
-  document.getElementById('composerAvatar').textContent = initials;
-  document.getElementById('composerAvatar').style.background = getAvatarColor(state.peerId);
+  updateUserUI();
+  updateConnectionStatus();
   
-  updateConnectionStatus('connecting');
   signaling.announce();
   signaling.listenForSignals();
   signaling.listenForPeers();
   
   showToast('Connected to network!', 'success');
-  updateConnectionStatus('connected');
+  
+  // Periodically update UI
+  setInterval(() => {
+    updateConnectionStatus();
+    updatePeerList();
+  }, 3000);
 }
 
 function init() {
