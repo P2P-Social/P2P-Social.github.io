@@ -34,13 +34,34 @@ const state = {
   aiMessages: []
 };
 
-// WebRTC Configuration
+// WebRTC Configuration with TURN servers for NAT traversal
 const rtcConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun.relay.metered.ca:80' },
+    {
+      urls: 'turn:global.relay.metered.ca:80',
+      username: 'e8dd65b92f6de3267ebb0134',
+      credential: 'XKuDNw8m0AsUdZqe'
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
+      username: 'e8dd65b92f6de3267ebb0134',
+      credential: 'XKuDNw8m0AsUdZqe'
+    },
+    {
+      urls: 'turn:global.relay.metered.ca:443',
+      username: 'e8dd65b92f6de3267ebb0134',
+      credential: 'XKuDNw8m0AsUdZqe'
+    },
+    {
+      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
+      username: 'e8dd65b92f6de3267ebb0134',
+      credential: 'XKuDNw8m0AsUdZqe'
+    }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 // ============================================
@@ -214,28 +235,47 @@ const p2p = {
     state.peers.set(peerId, { 
       connection: pc, 
       dataChannel, 
-      info: { displayName } 
+      info: { displayName },
+      iceCandidates: []
     });
     
     this.setupDataChannel(dataChannel, peerId);
     this.setupConnectionHandlers(pc, peerId);
     
+    // Wait for ICE gathering to complete or timeout
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+    
+    // Wait a moment for ICE candidates to gather
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     await signaling.sendSignal(peerId, 'offer', {
-      sdp: offer.sdp,
-      type: offer.type
+      sdp: pc.localDescription.sdp,
+      type: pc.localDescription.type
     });
   },
   
   async handleOffer(peerId, displayName, offer) {
     console.log('Received offer from:', peerId);
     
+    // Check if we already have a connection attempt
+    if (state.peers.has(peerId)) {
+      const existing = state.peers.get(peerId);
+      // If existing connection is failed, close it and try again
+      if (existing.connection.connectionState === 'failed') {
+        existing.connection.close();
+        state.peers.delete(peerId);
+      } else {
+        return; // Already connecting/connected
+      }
+    }
+    
     const pc = new RTCPeerConnection(rtcConfig);
     state.peers.set(peerId, { 
       connection: pc, 
       dataChannel: null, 
-      info: { displayName } 
+      info: { displayName },
+      iceCandidates: []
     });
     
     pc.ondatachannel = (event) => {
@@ -250,9 +290,12 @@ const p2p = {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     
+    // Wait a moment for ICE candidates to gather
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     await signaling.sendSignal(peerId, 'answer', {
-      sdp: answer.sdp,
-      type: answer.type
+      sdp: pc.localDescription.sdp,
+      type: pc.localDescription.type
     });
   },
   
