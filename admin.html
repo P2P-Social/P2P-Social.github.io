@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P Social - Admin Diagnostics</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔧</text></svg>">
+  
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+  
+  <style>
+    :root {
+      --bg: #0a0a0b;
+      --bg2: #141416;
+      --bg3: #1a1a1e;
+      --text: #fafafa;
+      --text2: #a0a0a8;
+      --accent: #00ff88;
+      --danger: #ff4466;
+      --warning: #ffaa00;
+      --border: #2a2a30;
+    }
+    
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+      line-height: 1.5;
+    }
+    
+    h1 {
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    h1 a {
+      font-size: 0.9rem;
+      color: var(--accent);
+      text-decoration: none;
+    }
+    
+    .subtitle {
+      color: var(--text2);
+      margin-bottom: 24px;
+    }
+    
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    
+    .card {
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    
+    .card h2 {
+      font-size: 0.9rem;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .stat {
+      font-size: 2.5rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    
+    .stat.warning { color: var(--warning); }
+    .stat.danger { color: var(--danger); }
+    
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--text2);
+    }
+    
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .status-row:last-child { border-bottom: none; }
+    
+    .status-label { color: var(--text2); }
+    
+    .status-value { font-weight: 600; }
+    .status-value.ok { color: var(--accent); }
+    .status-value.error { color: var(--danger); }
+    .status-value.warn { color: var(--warning); }
+    
+    .log-container {
+      background: var(--bg3);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 0.8rem;
+    }
+    
+    .log-entry {
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    
+    .log-entry:last-child { border-bottom: none; }
+    
+    .log-time { color: var(--text2); }
+    .log-type { font-weight: 600; padding: 0 8px; }
+    .log-type.info { color: var(--accent); }
+    .log-type.warn { color: var(--warning); }
+    .log-type.error { color: var(--danger); }
+    
+    .peer-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    .peer-table th, .peer-table td {
+      text-align: left;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    
+    .peer-table th {
+      color: var(--text2);
+      font-weight: 500;
+    }
+    
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    
+    .badge.online { background: var(--accent); color: #000; }
+    .badge.offline { background: var(--danger); color: #fff; }
+    .badge.stale { background: var(--warning); color: #000; }
+    
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    
+    button {
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+    
+    button:hover {
+      background: var(--border);
+    }
+    
+    button.danger {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    
+    button.danger:hover {
+      background: var(--danger);
+      color: #fff;
+    }
+    
+    .json-viewer {
+      background: var(--bg3);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    
+    .connection-test {
+      display: grid;
+      gap: 8px;
+    }
+    
+    .test-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      background: var(--bg3);
+      border-radius: 6px;
+    }
+    
+    .test-status {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--text2);
+    }
+    
+    .test-status.pass { background: var(--accent); }
+    .test-status.fail { background: var(--danger); }
+    .test-status.testing { background: var(--warning); animation: pulse 1s infinite; }
+    
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    
+    .section-title {
+      font-size: 1.2rem;
+      margin: 24px 0 16px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <h1>
+    🔧 P2P Social Diagnostics
+    <a href="./">← Back to App</a>
+  </h1>
+  <p class="subtitle">Network administration and debugging tools</p>
+  
+  <div class="actions">
+    <button onclick="refreshAll()">🔄 Refresh All</button>
+    <button onclick="runConnectionTests()">🧪 Run Connection Tests</button>
+    <button onclick="exportData()">📤 Export Data</button>
+    <button onclick="clearLocalData()" class="danger">🗑️ Clear Local Data</button>
+    <button onclick="clearFirebaseSignals()" class="danger">🧹 Clear Stale Signals</button>
+  </div>
+  
+  <div class="grid">
+    <div class="card">
+      <h2>📊 Network Stats</h2>
+      <div class="stat" id="peerCount">0</div>
+      <div class="stat-label">Active Peers (Firebase)</div>
+    </div>
+    
+    <div class="card">
+      <h2>🔗 WebRTC Connections</h2>
+      <div class="stat" id="webrtcCount">0</div>
+      <div class="stat-label">Open Data Channels</div>
+    </div>
+    
+    <div class="card">
+      <h2>📝 Posts</h2>
+      <div class="stat" id="postCount">0</div>
+      <div class="stat-label">Total Posts in Network</div>
+    </div>
+    
+    <div class="card">
+      <h2>📡 Signals</h2>
+      <div class="stat" id="signalCount">0</div>
+      <div class="stat-label">Pending Signals</div>
+    </div>
+  </div>
+  
+  <div class="grid">
+    <div class="card">
+      <h2>⚡ System Status</h2>
+      <div class="status-row">
+        <span class="status-label">Firebase Connection</span>
+        <span class="status-value" id="firebaseStatus">Checking...</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">WebRTC Support</span>
+        <span class="status-value" id="webrtcStatus">Checking...</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">LocalStorage</span>
+        <span class="status-value" id="localStorageStatus">Checking...</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Your Peer ID</span>
+        <span class="status-value" id="myPeerId" style="font-size: 0.75rem;">-</span>
+      </div>
+      <div class="status-row">
+        <span class="status-label">Display Name</span>
+        <span class="status-value" id="myName">-</span>
+      </div>
+    </div>
+    
+    <div class="card">
+      <h2>🧪 Connection Tests</h2>
+      <div class="connection-test" id="connectionTests">
+        <div class="test-item">
+          <span>STUN Server (Google)</span>
+          <div class="test-status" id="testStun"></div>
+        </div>
+        <div class="test-item">
+          <span>TURN Server (Metered)</span>
+          <div class="test-status" id="testTurn"></div>
+        </div>
+        <div class="test-item">
+          <span>Firebase Realtime DB</span>
+          <div class="test-status" id="testFirebase"></div>
+        </div>
+        <div class="test-item">
+          <span>Data Channel Creation</span>
+          <div class="test-status" id="testDataChannel"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <h3 class="section-title">👥 Active Peers</h3>
+  <div class="card">
+    <table class="peer-table">
+      <thead>
+        <tr>
+          <th>Peer ID</th>
+          <th>Name</th>
+          <th>Last Seen</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="peerTable">
+        <tr><td colspan="4" style="text-align: center; color: var(--text2);">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  
+  <h3 class="section-title">📋 Event Log</h3>
+  <div class="card">
+    <div class="log-container" id="logContainer">
+      <div class="log-entry">
+        <span class="log-time">--:--:--</span>
+        <span class="log-type info">INFO</span>
+        <span>Diagnostics page loaded</span>
+      </div>
+    </div>
+  </div>
+  
+  <h3 class="section-title">🗄️ Raw Firebase Data</h3>
+  <div class="card">
+    <div class="json-viewer" id="firebaseData">Loading...</div>
+  </div>
+  
+  <script>
+    // Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyCqPtXfmUtTq5e1Q0L9uxO084J-MDutRFI",
+      authDomain: "p2p-social-f44e0.firebaseapp.com",
+      databaseURL: "https://p2p-social-f44e0-default-rtdb.firebaseio.com",
+      projectId: "p2p-social-f44e0",
+      storageBucket: "p2p-social-f44e0.firebasestorage.app",
+      messagingSenderId: "55645673816",
+      appId: "1:55645673816:web:b0f187c33ad8beb5caed2d"
+    };
+    
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+    
+    // Logging
+    function log(message, type = 'info') {
+      const container = document.getElementById('logContainer');
+      const time = new Date().toLocaleTimeString();
+      const entry = document.createElement('div');
+      entry.className = 'log-entry';
+      entry.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="log-type ${type}">${type.toUpperCase()}</span>
+        <span>${message}</span>
+      `;
+      container.insertBefore(entry, container.firstChild);
+      
+      // Keep only last 100 entries
+      while (container.children.length > 100) {
+        container.removeChild(container.lastChild);
+      }
+    }
+    
+    // Check system status
+    function checkSystemStatus() {
+      // WebRTC support
+      const webrtcStatus = document.getElementById('webrtcStatus');
+      if (window.RTCPeerConnection) {
+        webrtcStatus.textContent = 'Supported';
+        webrtcStatus.className = 'status-value ok';
+      } else {
+        webrtcStatus.textContent = 'Not Supported';
+        webrtcStatus.className = 'status-value error';
+      }
+      
+      // LocalStorage
+      const lsStatus = document.getElementById('localStorageStatus');
+      try {
+        localStorage.setItem('test', 'test');
+        localStorage.removeItem('test');
+        lsStatus.textContent = 'Available';
+        lsStatus.className = 'status-value ok';
+      } catch (e) {
+        lsStatus.textContent = 'Blocked';
+        lsStatus.className = 'status-value error';
+      }
+      
+      // Peer info
+      document.getElementById('myPeerId').textContent = localStorage.getItem('p2p-peerId') || 'Not set';
+      document.getElementById('myName').textContent = localStorage.getItem('p2p-displayName') || 'Not set';
+    }
+    
+    // Firebase monitoring
+    function setupFirebaseMonitoring() {
+      // Check connection
+      database.ref('.info/connected').on('value', (snap) => {
+        const status = document.getElementById('firebaseStatus');
+        if (snap.val() === true) {
+          status.textContent = 'Connected';
+          status.className = 'status-value ok';
+          log('Firebase connected', 'info');
+        } else {
+          status.textContent = 'Disconnected';
+          status.className = 'status-value error';
+          log('Firebase disconnected', 'error');
+        }
+      });
+      
+      // Watch peers
+      database.ref('peers').on('value', (snap) => {
+        const peers = snap.val() || {};
+        const peerList = Object.entries(peers);
+        
+        document.getElementById('peerCount').textContent = peerList.length;
+        
+        const tbody = document.getElementById('peerTable');
+        if (peerList.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text2);">No peers online</td></tr>';
+        } else {
+          tbody.innerHTML = peerList.map(([id, info]) => {
+            const lastSeen = new Date(info.lastSeen);
+            const ago = Math.floor((Date.now() - info.lastSeen) / 1000);
+            let status = 'online';
+            if (ago > 30) status = 'stale';
+            if (ago > 60) status = 'offline';
+            
+            const myId = localStorage.getItem('p2p-peerId');
+            const isMe = id === myId ? ' (you)' : '';
+            
+            return `
+              <tr>
+                <td style="font-family: monospace; font-size: 0.75rem;">${id}${isMe}</td>
+                <td>${info.displayName || 'Unknown'}</td>
+                <td>${ago}s ago</td>
+                <td><span class="badge ${status}">${status}</span></td>
+              </tr>
+            `;
+          }).join('');
+        }
+        
+        log(`Peers updated: ${peerList.length} total`, 'info');
+      });
+      
+      // Watch signals
+      database.ref('signals').on('value', (snap) => {
+        const signals = snap.val() || {};
+        let count = 0;
+        Object.values(signals).forEach(peerSignals => {
+          count += Object.keys(peerSignals || {}).length;
+        });
+        document.getElementById('signalCount').textContent = count;
+      });
+      
+      // Watch posts
+      database.ref('posts').on('value', (snap) => {
+        const posts = snap.val() || {};
+        document.getElementById('postCount').textContent = Object.keys(posts).length;
+      });
+    }
+    
+    // Raw data viewer
+    function updateRawData() {
+      database.ref().once('value', (snap) => {
+        const data = snap.val() || {};
+        document.getElementById('firebaseData').textContent = JSON.stringify(data, null, 2);
+      });
+    }
+    
+    // Connection tests
+    async function runConnectionTests() {
+      log('Starting connection tests...', 'info');
+      
+      // Reset all
+      ['testStun', 'testTurn', 'testFirebase', 'testDataChannel'].forEach(id => {
+        document.getElementById(id).className = 'test-status testing';
+      });
+      
+      // Test STUN
+      try {
+        const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+        pc.createDataChannel('test');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+          pc.onicecandidate = (e) => {
+            if (e.candidate && e.candidate.candidate.includes('srflx')) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          };
+        });
+        
+        pc.close();
+        document.getElementById('testStun').className = 'test-status pass';
+        log('STUN test passed', 'info');
+      } catch (e) {
+        document.getElementById('testStun').className = 'test-status fail';
+        log('STUN test failed: ' + e.message, 'error');
+      }
+      
+      // Test TURN
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{
+            urls: 'turn:global.relay.metered.ca:80',
+            username: 'e8dd65b92f6de3267ebb0134',
+            credential: 'XKuDNw8m0AsUdZqe'
+          }]
+        });
+        pc.createDataChannel('test');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+          pc.onicecandidate = (e) => {
+            if (e.candidate && e.candidate.candidate.includes('relay')) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          };
+        });
+        
+        pc.close();
+        document.getElementById('testTurn').className = 'test-status pass';
+        log('TURN test passed', 'info');
+      } catch (e) {
+        document.getElementById('testTurn').className = 'test-status fail';
+        log('TURN test failed: ' + e.message, 'warn');
+      }
+      
+      // Test Firebase
+      try {
+        const testRef = database.ref('_test_' + Date.now());
+        await testRef.set({ test: true });
+        await testRef.remove();
+        document.getElementById('testFirebase').className = 'test-status pass';
+        log('Firebase test passed', 'info');
+      } catch (e) {
+        document.getElementById('testFirebase').className = 'test-status fail';
+        log('Firebase test failed: ' + e.message, 'error');
+      }
+      
+      // Test Data Channel
+      try {
+        const pc1 = new RTCPeerConnection();
+        const pc2 = new RTCPeerConnection();
+        
+        pc1.onicecandidate = e => e.candidate && pc2.addIceCandidate(e.candidate);
+        pc2.onicecandidate = e => e.candidate && pc1.addIceCandidate(e.candidate);
+        
+        const dc1 = pc1.createDataChannel('test');
+        
+        const connected = new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+          pc2.ondatachannel = (e) => {
+            e.channel.onopen = () => {
+              clearTimeout(timeout);
+              resolve();
+            };
+          };
+        });
+        
+        const offer = await pc1.createOffer();
+        await pc1.setLocalDescription(offer);
+        await pc2.setRemoteDescription(offer);
+        
+        const answer = await pc2.createAnswer();
+        await pc2.setLocalDescription(answer);
+        await pc1.setRemoteDescription(answer);
+        
+        await connected;
+        
+        pc1.close();
+        pc2.close();
+        
+        document.getElementById('testDataChannel').className = 'test-status pass';
+        log('Data channel test passed', 'info');
+      } catch (e) {
+        document.getElementById('testDataChannel').className = 'test-status fail';
+        log('Data channel test failed: ' + e.message, 'error');
+      }
+      
+      log('Connection tests complete', 'info');
+    }
+    
+    // Actions
+    function refreshAll() {
+      log('Refreshing all data...', 'info');
+      updateRawData();
+      checkSystemStatus();
+    }
+    
+    function exportData() {
+      database.ref().once('value', (snap) => {
+        const data = {
+          firebase: snap.val(),
+          local: {
+            peerId: localStorage.getItem('p2p-peerId'),
+            displayName: localStorage.getItem('p2p-displayName'),
+            likes: localStorage.getItem('p2p-likes')
+          },
+          timestamp: new Date().toISOString()
+        };
+        
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `p2p-social-export-${Date.now()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        
+        log('Data exported', 'info');
+      });
+    }
+    
+    function clearLocalData() {
+      if (confirm('Clear all local data? You will get a new peer ID.')) {
+        localStorage.removeItem('p2p-peerId');
+        localStorage.removeItem('p2p-displayName');
+        localStorage.removeItem('p2p-likes');
+        log('Local data cleared', 'warn');
+        checkSystemStatus();
+      }
+    }
+    
+    function clearFirebaseSignals() {
+      if (confirm('Clear all stale signals from Firebase?')) {
+        database.ref('signals').remove().then(() => {
+          log('Signals cleared', 'warn');
+        }).catch(e => {
+          log('Failed to clear signals: ' + e.message, 'error');
+        });
+      }
+    }
+    
+    // Initialize
+    checkSystemStatus();
+    setupFirebaseMonitoring();
+    updateRawData();
+    
+    // Auto-refresh raw data every 10s
+    setInterval(updateRawData, 10000);
+    
+    log('Diagnostics initialized', 'info');
+  </script>
+</body>
+</html>

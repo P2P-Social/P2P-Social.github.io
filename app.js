@@ -1,5 +1,5 @@
 // ============================================
-// P2P Social - Working Version
+// P2P Social - Main Application
 // ============================================
 
 // Firebase Configuration
@@ -17,16 +17,14 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 
-// ============================================
 // Global State
-// ============================================
-
 const state = {
   peerId: null,
   displayName: null,
   peers: new Map(),
   posts: [],
-  mediaQueue: []
+  mediaQueue: [],
+  likes: new Set() // Track liked posts
 };
 
 // WebRTC Configuration with TURN servers
@@ -100,8 +98,23 @@ function formatTime(timestamp) {
   return date.toLocaleDateString();
 }
 
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  let html = div.innerHTML;
+  
+  // Convert URLs to clickable links
+  const urlRegex = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g;
+  html = html.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+  
+  html = html.replace(/\n/g, '<br>');
+  return html;
+}
+
 function showToast(message, type = 'info') {
   const container = document.getElementById('toastContainer');
+  if (!container) return;
+  
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = message;
@@ -121,6 +134,43 @@ function fileToBase64(file) {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+// Helper to safely add event listeners
+function on(id, event, handler) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener(event, handler);
+  } else {
+    console.warn(`Element not found: ${id}`);
+  }
+}
+
+// ============================================
+// URL Sharing
+// ============================================
+
+function getPostUrl(postId) {
+  const url = new URL(window.location.href);
+  url.hash = `post-${postId}`;
+  return url.toString();
+}
+
+function checkUrlForPost() {
+  const hash = window.location.hash;
+  if (hash && hash.startsWith('#post-')) {
+    const postId = hash.replace('#post-', '');
+    setTimeout(() => scrollToPost(postId), 500);
+  }
+}
+
+function scrollToPost(postId) {
+  const postEl = document.getElementById(`post-${postId}`);
+  if (postEl) {
+    postEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    postEl.classList.add('highlighted');
+    setTimeout(() => postEl.classList.remove('highlighted'), 3000);
+  }
 }
 
 // ============================================
@@ -161,30 +211,24 @@ const signaling = {
       timestamp: Date.now()
     });
     
-    // Auto-cleanup after 30 seconds
     setTimeout(() => signalRef.remove().catch(() => {}), 30000);
   },
   
   listenForSignals() {
-    console.log('Listening for signals at:', `signals/${state.peerId}`);
+    console.log('Listening for signals...');
     
     database.ref(`signals/${state.peerId}`).on('child_added', async (snapshot) => {
       const signal = snapshot.val();
-      console.log('Received signal:', signal?.type, 'from:', signal?.from);
-      
       if (signal) {
+        console.log('Received signal:', signal.type, 'from:', signal.from);
         await this.handleSignal(signal);
       }
-      
-      // Remove processed signal
       snapshot.ref.remove().catch(() => {});
     });
   },
   
   async handleSignal(signal) {
     const { type, data, from, fromName } = signal;
-    
-    console.log(`Handling signal: ${type} from ${from}`);
     
     if (type === 'offer') {
       await p2p.handleOffer(from, fromName, data);
@@ -200,8 +244,6 @@ const signaling = {
     
     database.ref('peers').on('value', (snapshot) => {
       const peers = snapshot.val() || {};
-      console.log('Peers in Firebase:', Object.keys(peers).length);
-      
       let onlineCount = 0;
       
       Object.entries(peers).forEach(([peerId, info]) => {
@@ -216,7 +258,8 @@ const signaling = {
         }
       });
       
-      document.getElementById('peerCount').textContent = onlineCount;
+      const peerCountEl = document.getElementById('peerCount');
+      if (peerCountEl) peerCountEl.textContent = onlineCount;
     });
   }
 };
@@ -227,12 +270,9 @@ const signaling = {
 
 const p2p = {
   async connectToPeer(peerId, displayName) {
-    if (state.peers.has(peerId)) {
-      console.log('Already have connection to:', peerId);
-      return;
-    }
+    if (state.peers.has(peerId)) return;
     
-    console.log('Creating connection to peer:', peerId);
+    console.log('Connecting to peer:', peerId);
     
     const pc = new RTCPeerConnection(rtcConfig);
     const dataChannel = pc.createDataChannel('messages', { ordered: true });
@@ -247,22 +287,15 @@ const p2p = {
     this.setupDataChannel(dataChannel, peerId);
     this.setupConnectionHandlers(pc, peerId);
     
-    // ICE candidate handling
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('Sending ICE candidate to:', peerId);
         signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
       }
-    };
-    
-    pc.onicegatheringstatechange = () => {
-      console.log('ICE gathering state:', pc.iceGatheringState);
     };
     
     try {
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      console.log('Created offer for:', peerId);
       
       await signaling.sendSignal(peerId, 'offer', {
         sdp: pc.localDescription.sdp,
@@ -277,21 +310,10 @@ const p2p = {
   async handleOffer(peerId, displayName, offer) {
     console.log('Handling offer from:', peerId);
     
-    // Check for existing connection
     if (state.peers.has(peerId)) {
       const existing = state.peers.get(peerId);
-      if (existing.connection.connectionState === 'connected') {
-        console.log('Already connected to:', peerId);
-        return;
-      }
-      if (existing.connection.connectionState !== 'failed' && 
-          existing.connection.connectionState !== 'closed') {
-        // Collision - lower peer ID wins
-        if (state.peerId < peerId) {
-          console.log('Ignoring offer due to collision, we initiated');
-          return;
-        }
-      }
+      if (existing.connection.connectionState === 'connected') return;
+      if (existing.connection.connectionState !== 'failed' && state.peerId < peerId) return;
       existing.connection.close();
       state.peers.delete(peerId);
     }
@@ -325,7 +347,6 @@ const p2p = {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      console.log('Created answer for:', peerId);
       
       await signaling.sendSignal(peerId, 'answer', {
         sdp: pc.localDescription.sdp,
@@ -343,12 +364,9 @@ const p2p = {
     if (peer && peer.connection.signalingState === 'have-local-offer') {
       try {
         await peer.connection.setRemoteDescription(new RTCSessionDescription(answer));
-        console.log('Set remote description for:', peerId);
       } catch (err) {
         console.error('Error setting remote description:', err);
       }
-    } else {
-      console.log('Cannot apply answer, state:', peer?.connection.signalingState);
     }
   },
   
@@ -358,7 +376,7 @@ const p2p = {
       try {
         await peer.connection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
-        // Ignore ICE errors
+        // Ignore
       }
     }
   },
@@ -374,7 +392,6 @@ const p2p = {
         updateConnectionStatus();
         updatePeerList();
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
-        console.log('Connection lost with:', peerId);
         state.peers.delete(peerId);
         updateConnectionStatus();
         updatePeerList();
@@ -382,13 +399,11 @@ const p2p = {
     };
     
     pc.oniceconnectionstatechange = () => {
-      console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState);
+      console.log(`ICE state with ${peerId}:`, pc.iceConnectionState);
     };
   },
   
   setupDataChannel(channel, peerId) {
-    console.log('Setting up data channel with:', peerId, 'state:', channel.readyState);
-    
     channel.onopen = () => {
       console.log('✅ Data channel OPEN with:', peerId);
       updateConnectionStatus();
@@ -397,36 +412,33 @@ const p2p = {
     };
     
     channel.onmessage = (event) => {
-      console.log('Message from:', peerId);
-      const message = JSON.parse(event.data);
-      this.handleMessage(peerId, message);
+      try {
+        const message = JSON.parse(event.data);
+        this.handleMessage(peerId, message);
+      } catch (err) {
+        console.error('Error parsing message:', err);
+      }
     };
     
     channel.onerror = (error) => {
-      console.error('Data channel error with', peerId, ':', error);
+      console.error('Data channel error:', error);
     };
     
     channel.onclose = () => {
-      console.log('Data channel CLOSED with:', peerId);
+      console.log('Data channel closed with:', peerId);
       updateConnectionStatus();
       updatePeerList();
     };
   },
   
-  // Chunked message storage
   chunkedMessages: {},
   
   handleMessage(fromPeerId, message) {
-    // Handle chunked messages
     if (message.type === 'chunk') {
       const { messageId, chunkIndex, totalChunks, data } = message;
       
       if (!this.chunkedMessages[messageId]) {
-        this.chunkedMessages[messageId] = {
-          chunks: new Array(totalChunks),
-          received: 0,
-          totalChunks
-        };
+        this.chunkedMessages[messageId] = { chunks: new Array(totalChunks), received: 0 };
       }
       
       const cm = this.chunkedMessages[messageId];
@@ -435,15 +447,13 @@ const p2p = {
         cm.received++;
       }
       
-      if (cm.received === cm.totalChunks) {
-        const fullMessageStr = cm.chunks.join('');
-        delete this.chunkedMessages[messageId];
-        
+      if (cm.received === totalChunks) {
         try {
-          const fullMessage = JSON.parse(fullMessageStr);
+          const fullMessage = JSON.parse(cm.chunks.join(''));
+          delete this.chunkedMessages[messageId];
           this.handleMessage(fromPeerId, fullMessage);
         } catch (e) {
-          console.error('Error parsing reassembled message:', e);
+          console.error('Error reassembling message:', e);
         }
       }
       return;
@@ -454,7 +464,7 @@ const p2p = {
         addPost(message.data, false);
         break;
       case 'sync-request':
-        state.posts.slice(-20).forEach(post => {
+        state.posts.forEach(post => {
           this.sendToPeer(fromPeerId, { type: 'post', data: post });
         });
         break;
@@ -465,47 +475,42 @@ const p2p = {
           updatePeerList();
         }
         break;
-      default:
-        console.log('Unknown message type:', message.type);
     }
   },
   
   sendToPeer(peerId, message) {
     const peer = state.peers.get(peerId);
-    if (peer && peer.dataChannel && peer.dataChannel.readyState === 'open') {
-      const messageStr = JSON.stringify(message);
-      this.sendChunked(peer.dataChannel, messageStr);
+    if (peer?.dataChannel?.readyState === 'open') {
+      const str = JSON.stringify(message);
+      this.sendChunked(peer.dataChannel, str);
     }
   },
   
   broadcast(message) {
-    const messageStr = JSON.stringify(message);
-    state.peers.forEach((peer, peerId) => {
-      if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-        this.sendChunked(peer.dataChannel, messageStr);
+    const str = JSON.stringify(message);
+    state.peers.forEach((peer) => {
+      if (peer.dataChannel?.readyState === 'open') {
+        this.sendChunked(peer.dataChannel, str);
       }
     });
   },
   
-  sendChunked(channel, messageStr) {
+  sendChunked(channel, str) {
     const CHUNK_SIZE = 16000;
-    
-    if (messageStr.length > CHUNK_SIZE) {
+    if (str.length > CHUNK_SIZE) {
       const messageId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-      const totalChunks = Math.ceil(messageStr.length / CHUNK_SIZE);
-      
+      const totalChunks = Math.ceil(str.length / CHUNK_SIZE);
       for (let i = 0; i < totalChunks; i++) {
-        const chunk = messageStr.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
         channel.send(JSON.stringify({
           type: 'chunk',
           messageId,
           chunkIndex: i,
           totalChunks,
-          data: chunk
+          data: str.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
         }));
       }
     } else {
-      channel.send(messageStr);
+      channel.send(str);
     }
   }
 };
@@ -517,17 +522,14 @@ const p2p = {
 function updateConnectionStatus() {
   const dot = document.getElementById('connectionDot');
   const text = document.getElementById('connectionStatus');
+  if (!dot || !text) return;
   
-  // Count WebRTC-connected peers
   let connectedCount = 0;
   state.peers.forEach(peer => {
-    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-      connectedCount++;
-    }
+    if (peer.dataChannel?.readyState === 'open') connectedCount++;
   });
   
   dot.className = 'status-dot';
-  
   if (connectedCount > 0) {
     dot.classList.add('connected');
     text.textContent = 'Connected';
@@ -538,24 +540,24 @@ function updateConnectionStatus() {
 
 function updatePeerList() {
   const peerList = document.getElementById('peerList');
-  peerList.innerHTML = '';
+  if (!peerList) return;
   
+  peerList.innerHTML = '';
   let hasConnectedPeers = false;
   
   state.peers.forEach((peer, peerId) => {
-    if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+    if (peer.dataChannel?.readyState === 'open') {
       hasConnectedPeers = true;
-      
-      const peerEl = document.createElement('div');
-      peerEl.className = 'peer-item';
-      peerEl.innerHTML = `
+      const el = document.createElement('div');
+      el.className = 'peer-item';
+      el.innerHTML = `
         <div class="peer-avatar" style="background: ${getAvatarColor(peerId)}">${getInitials(peer.info?.displayName)}</div>
         <div class="peer-info">
           <div class="peer-name">${peer.info?.displayName || 'Unknown'}</div>
           <div class="peer-status">Connected</div>
         </div>
       `;
-      peerList.appendChild(peerEl);
+      peerList.appendChild(el);
     }
   });
   
@@ -564,31 +566,64 @@ function updatePeerList() {
   }
 }
 
+function updateUserUI() {
+  const initials = getInitials(state.displayName);
+  const avatarColor = getAvatarColor(state.peerId);
+  
+  const myAvatar = document.getElementById('myAvatar');
+  const myName = document.getElementById('myName');
+  const composerAvatar = document.getElementById('composerAvatar');
+  
+  if (myAvatar) {
+    myAvatar.textContent = initials;
+    myAvatar.style.background = avatarColor;
+  }
+  if (myName) myName.textContent = state.displayName;
+  if (composerAvatar) {
+    composerAvatar.textContent = initials;
+    composerAvatar.style.background = avatarColor;
+  }
+}
+
+// ============================================
+// Posts
+// ============================================
+
 function addPost(post, broadcast = true) {
   if (state.posts.some(p => p.id === post.id)) return;
   
   state.posts.push(post);
   
-  document.getElementById('emptyState').style.display = 'none';
+  const emptyState = document.getElementById('emptyState');
+  if (emptyState) emptyState.style.display = 'none';
   
+  renderPost(post);
+  
+  if (broadcast) {
+    p2p.broadcast({ type: 'post', data: post });
+  }
+}
+
+function renderPost(post) {
   const feed = document.getElementById('feed');
+  if (!feed || document.getElementById(`post-${post.id}`)) return;
+  
   const postEl = document.createElement('article');
   postEl.className = 'post';
   postEl.id = `post-${post.id}`;
   
   let mediaHtml = '';
-  if (post.media && post.media.length > 0) {
+  if (post.media?.length > 0) {
     post.media.forEach(item => {
-      if (item.type && item.type.startsWith('image/')) {
-        mediaHtml += `<div class="post-media"><img src="${item.data}" alt="Post image"></div>`;
-      } else if (item.type && item.type.startsWith('video/')) {
+      if (item.type?.startsWith('image/')) {
+        mediaHtml += `<div class="post-media"><img src="${item.data}" alt="Image"></div>`;
+      } else if (item.type?.startsWith('video/')) {
         mediaHtml += `<div class="post-media"><video src="${item.data}" controls playsinline></video></div>`;
       }
     });
   }
   
-  // Convert URLs to links
-  let content = escapeHtml(post.content);
+  const isLiked = state.likes.has(post.id);
   
   postEl.innerHTML = `
     <div class="post-header">
@@ -598,128 +633,71 @@ function addPost(post, broadcast = true) {
         <div class="post-time">${formatTime(post.timestamp)}</div>
       </div>
     </div>
-    <div class="post-content">${content}</div>
+    <div class="post-content">${escapeHtml(post.content)}</div>
     ${mediaHtml}
+    <div class="post-actions">
+      <button class="post-action ${isLiked ? 'liked' : ''}" onclick="likePost('${post.id}')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        Like
+      </button>
+      <button class="post-action" onclick="sharePost('${post.id}')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+        Share
+      </button>
+      <button class="post-action" onclick="replyToPost('${post.id}', '${post.author}')">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.99 4c0-1.1-.89-2-1.99-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4-.01-18z"/></svg>
+        Reply
+      </button>
+    </div>
   `;
   
   feed.insertBefore(postEl, feed.firstChild);
-  
-  if (broadcast) {
-    p2p.broadcast({ type: 'post', data: post });
+}
+
+// Post actions (global functions for onclick)
+window.likePost = function(postId) {
+  const btn = document.querySelector(`#post-${postId} .post-action`);
+  if (state.likes.has(postId)) {
+    state.likes.delete(postId);
+    if (btn) btn.classList.remove('liked');
+    showToast('Unliked');
+  } else {
+    state.likes.add(postId);
+    if (btn) btn.classList.add('liked');
+    showToast('Liked!', 'success');
   }
-}
+};
 
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  let html = div.innerHTML;
+window.sharePost = function(postId) {
+  const url = getPostUrl(postId);
   
-  // Convert URLs to clickable links
-  const urlRegex = /(https?:\/\/[^\s<]+[^<.,:;"')\]\s])/g;
-  html = html.replace(urlRegex, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
-  
-  // Convert newlines
-  html = html.replace(/\n/g, '<br>');
-  
-  return html;
-}
+  if (navigator.share) {
+    navigator.share({
+      title: 'P2P Social Post',
+      url: url
+    }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(url).then(() => {
+      showToast('Link copied!', 'success');
+    }).catch(() => {
+      showToast('Could not copy link', 'error');
+    });
+  }
+};
 
-// ============================================
-// Event Handlers
-// ============================================
-
-function setupEventListeners() {
-  // Mobile menu
-  const sidebar = document.getElementById('sidebar');
-  const menuBtn = document.getElementById('mobileMenuBtn');
-  
-  menuBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    sidebar.classList.toggle('mobile-open');
-    console.log('Menu toggled:', sidebar.classList.contains('mobile-open'));
-  });
-  
-  // Close sidebar when clicking outside
-  document.addEventListener('click', (e) => {
-    if (sidebar.classList.contains('mobile-open') && 
-        !sidebar.contains(e.target) && 
-        e.target !== menuBtn) {
-      sidebar.classList.remove('mobile-open');
-    }
-  });
-  
-  // Initial name modal
-  document.getElementById('saveNameBtn').onclick = () => {
-    const name = document.getElementById('nameInput').value.trim();
-    if (name) {
-      state.displayName = name;
-      localStorage.setItem('p2p-displayName', name);
-      document.getElementById('nameModal').classList.remove('active');
-      initializeNetwork();
-    }
-  };
-  
-  document.getElementById('nameInput').onkeypress = (e) => {
-    if (e.key === 'Enter') {
-      document.getElementById('saveNameBtn').click();
-    }
-  };
-  
-  // Change name
-  document.getElementById('myProfile').onclick = () => {
-    document.getElementById('newNameInput').value = state.displayName;
-    document.getElementById('changeNameModal').classList.add('active');
-    document.getElementById('sidebar').classList.remove('mobile-open');
-  };
-  
-  document.getElementById('confirmNameBtn').onclick = () => {
-    const newName = document.getElementById('newNameInput').value.trim();
-    if (newName && newName !== state.displayName) {
-      state.displayName = newName;
-      localStorage.setItem('p2p-displayName', newName);
-      signaling.updateName();
-      p2p.broadcast({ type: 'name-change', data: { newName } });
-      updateUserUI();
-      showToast('Name updated!', 'success');
-    }
-    document.getElementById('changeNameModal').classList.remove('active');
-  };
-  
-  document.getElementById('cancelNameBtn').onclick = () => {
-    document.getElementById('changeNameModal').classList.remove('active');
-  };
-  
-  document.getElementById('newNameInput').onkeypress = (e) => {
-    if (e.key === 'Enter') {
-      document.getElementById('confirmNameBtn').click();
-    }
-  };
-  
-  // Post
-  document.getElementById('postBtn').onclick = createPost;
-  document.getElementById('postInput').onkeypress = (e) => {
-    if (e.key === 'Enter' && e.ctrlKey) {
-      createPost();
-    }
-  };
-  
-  // Media
-  document.getElementById('addImageBtn').onclick = () => {
-    document.getElementById('imageInput').click();
-  };
-  
-  document.getElementById('addVideoBtn').onclick = () => {
-    document.getElementById('videoInput').click();
-  };
-  
-  document.getElementById('imageInput').onchange = handleMediaSelect;
-  document.getElementById('videoInput').onchange = handleMediaSelect;
-}
+window.replyToPost = function(postId, author) {
+  const input = document.getElementById('postInput');
+  if (input) {
+    input.value = `@${author} `;
+    input.focus();
+  }
+};
 
 async function createPost() {
   const input = document.getElementById('postInput');
-  const content = input.value.trim();
+  if (!input) return;
   
+  const content = input.value.trim();
   if (!content && state.mediaQueue.length === 0) return;
   
   const post = {
@@ -735,7 +713,8 @@ async function createPost() {
   
   input.value = '';
   state.mediaQueue = [];
-  document.getElementById('mediaPreview').innerHTML = '';
+  const preview = document.getElementById('mediaPreview');
+  if (preview) preview.innerHTML = '';
   
   showToast('Posted!', 'success');
 }
@@ -743,6 +722,7 @@ async function createPost() {
 async function handleMediaSelect(event) {
   const files = Array.from(event.target.files);
   const preview = document.getElementById('mediaPreview');
+  if (!preview) return;
   
   for (const file of files) {
     if (file.size > 25 * 1024 * 1024) {
@@ -751,7 +731,7 @@ async function handleMediaSelect(event) {
     }
     
     if (file.size > 5 * 1024 * 1024) {
-      showToast('Processing large file...', 'info');
+      showToast('Processing...', 'info');
     }
     
     const data = await fileToBase64(file);
@@ -761,7 +741,7 @@ async function handleMediaSelect(event) {
     previewItem.className = 'preview-item';
     
     if (file.type.startsWith('image/')) {
-      previewItem.innerHTML = `<img src="${data}" alt="${file.name}">`;
+      previewItem.innerHTML = `<img src="${data}" alt="">`;
     } else if (file.type.startsWith('video/')) {
       previewItem.innerHTML = `<video src="${data}"></video>`;
     }
@@ -770,25 +750,118 @@ async function handleMediaSelect(event) {
     removeBtn.className = 'preview-remove';
     removeBtn.textContent = '×';
     removeBtn.onclick = () => {
-      const index = state.mediaQueue.findIndex(m => m.name === file.name);
-      if (index > -1) state.mediaQueue.splice(index, 1);
+      const idx = state.mediaQueue.findIndex(m => m.name === file.name);
+      if (idx > -1) state.mediaQueue.splice(idx, 1);
       previewItem.remove();
     };
     previewItem.appendChild(removeBtn);
-    
     preview.appendChild(previewItem);
   }
   
   event.target.value = '';
 }
 
-function updateUserUI() {
-  const initials = getInitials(state.displayName);
-  document.getElementById('myAvatar').textContent = initials;
-  document.getElementById('myAvatar').style.background = getAvatarColor(state.peerId);
-  document.getElementById('myName').textContent = state.displayName;
-  document.getElementById('composerAvatar').textContent = initials;
-  document.getElementById('composerAvatar').style.background = getAvatarColor(state.peerId);
+// ============================================
+// Event Listeners
+// ============================================
+
+function setupEventListeners() {
+  // Mobile menu
+  on('menuBtn', 'click', (e) => {
+    e.stopPropagation();
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) {
+      sidebar.classList.toggle('open');
+      console.log('Menu toggled');
+    }
+  });
+  
+  // Close sidebar on outside click
+  document.addEventListener('click', (e) => {
+    const sidebar = document.getElementById('sidebar');
+    const menuBtn = document.getElementById('menuBtn');
+    if (sidebar?.classList.contains('open') && 
+        !sidebar.contains(e.target) && 
+        e.target !== menuBtn && 
+        !menuBtn?.contains(e.target)) {
+      sidebar.classList.remove('open');
+    }
+  });
+  
+  // Initial name modal
+  on('saveNameBtn', 'click', () => {
+    const input = document.getElementById('nameInput');
+    const name = input?.value.trim();
+    if (name) {
+      state.displayName = name;
+      localStorage.setItem('p2p-displayName', name);
+      const modal = document.getElementById('nameModal');
+      if (modal) modal.classList.remove('active');
+      initializeNetwork();
+    }
+  });
+  
+  on('nameInput', 'keypress', (e) => {
+    if (e.key === 'Enter') {
+      document.getElementById('saveNameBtn')?.click();
+    }
+  });
+  
+  // Change name
+  on('myProfile', 'click', () => {
+    const input = document.getElementById('newNameInput');
+    if (input) input.value = state.displayName;
+    document.getElementById('changeNameModal')?.classList.add('active');
+    document.getElementById('sidebar')?.classList.remove('open');
+  });
+  
+  on('confirmNameBtn', 'click', () => {
+    const input = document.getElementById('newNameInput');
+    const newName = input?.value.trim();
+    if (newName && newName !== state.displayName) {
+      state.displayName = newName;
+      localStorage.setItem('p2p-displayName', newName);
+      signaling.updateName();
+      p2p.broadcast({ type: 'name-change', data: { newName } });
+      updateUserUI();
+      showToast('Name updated!', 'success');
+    }
+    document.getElementById('changeNameModal')?.classList.remove('active');
+  });
+  
+  on('cancelNameBtn', 'click', () => {
+    document.getElementById('changeNameModal')?.classList.remove('active');
+  });
+  
+  on('newNameInput', 'keypress', (e) => {
+    if (e.key === 'Enter') {
+      document.getElementById('confirmNameBtn')?.click();
+    }
+  });
+  
+  // Post
+  on('postBtn', 'click', createPost);
+  
+  on('postInput', 'keypress', (e) => {
+    if (e.key === 'Enter' && e.ctrlKey) {
+      createPost();
+    }
+  });
+  
+  // Media
+  on('addImageBtn', 'click', () => {
+    document.getElementById('imageInput')?.click();
+  });
+  
+  on('addVideoBtn', 'click', () => {
+    document.getElementById('videoInput')?.click();
+  });
+  
+  on('imageInput', 'change', handleMediaSelect);
+  on('videoInput', 'change', handleMediaSelect);
+  
+  // URL hash change
+  window.addEventListener('hashchange', checkUrlForPost);
 }
 
 // ============================================
@@ -797,7 +870,7 @@ function updateUserUI() {
 
 function initializeNetwork() {
   console.log('=== P2P Social Initializing ===');
-  console.log('My peer ID:', state.peerId);
+  console.log('Peer ID:', state.peerId);
   console.log('Display name:', state.displayName);
   
   updateUserUI();
@@ -809,31 +882,41 @@ function initializeNetwork() {
   
   showToast('Connected to network!', 'success');
   
-  // Periodically update UI
+  // Check URL for post link
+  checkUrlForPost();
+  
+  // Periodic UI update
   setInterval(() => {
     updateConnectionStatus();
     updatePeerList();
   }, 3000);
-  
-  console.log('=== Initialization complete ===');
 }
 
 function init() {
+  console.log('P2P Social starting...');
+  
   state.peerId = localStorage.getItem('p2p-peerId') || generatePeerId();
   localStorage.setItem('p2p-peerId', state.peerId);
   
   state.displayName = localStorage.getItem('p2p-displayName');
   
+  // Load saved likes
+  try {
+    const savedLikes = localStorage.getItem('p2p-likes');
+    if (savedLikes) state.likes = new Set(JSON.parse(savedLikes));
+  } catch (e) {}
+  
   setupEventListeners();
   
   if (state.displayName) {
-    document.getElementById('nameModal').classList.remove('active');
+    document.getElementById('nameModal')?.classList.remove('active');
     initializeNetwork();
   } else {
-    document.getElementById('nameModal').classList.add('active');
+    document.getElementById('nameModal')?.classList.add('active');
   }
 }
 
+// Start when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {
