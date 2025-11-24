@@ -129,6 +129,7 @@ function fileToBase64(file) {
 
 const signaling = {
   async announce() {
+    console.log('Announcing peer:', state.peerId);
     const peerRef = database.ref(`peers/${state.peerId}`);
     await peerRef.set({
       displayName: state.displayName,
@@ -150,30 +151,40 @@ const signaling = {
   },
   
   async sendSignal(targetPeerId, type, data) {
-    await database.ref(`signals/${targetPeerId}/${state.peerId}`).push({
+    console.log(`Sending ${type} to ${targetPeerId}`);
+    const signalRef = database.ref(`signals/${targetPeerId}`).push();
+    await signalRef.set({
       type,
       data,
       from: state.peerId,
       fromName: state.displayName,
       timestamp: Date.now()
     });
+    
+    // Auto-cleanup after 30 seconds
+    setTimeout(() => signalRef.remove().catch(() => {}), 30000);
   },
   
   listenForSignals() {
-    database.ref(`signals/${state.peerId}`).on('child_added', (snapshot) => {
-      const signals = snapshot.val();
-      if (!signals) return;
+    console.log('Listening for signals at:', `signals/${state.peerId}`);
+    
+    database.ref(`signals/${state.peerId}`).on('child_added', async (snapshot) => {
+      const signal = snapshot.val();
+      console.log('Received signal:', signal?.type, 'from:', signal?.from);
       
-      Object.values(signals).forEach(signal => {
-        this.handleSignal(signal);
-      });
+      if (signal) {
+        await this.handleSignal(signal);
+      }
       
-      snapshot.ref.remove();
+      // Remove processed signal
+      snapshot.ref.remove().catch(() => {});
     });
   },
   
   async handleSignal(signal) {
     const { type, data, from, fromName } = signal;
+    
+    console.log(`Handling signal: ${type} from ${from}`);
     
     if (type === 'offer') {
       await p2p.handleOffer(from, fromName, data);
@@ -185,8 +196,11 @@ const signaling = {
   },
   
   listenForPeers() {
+    console.log('Listening for peers...');
+    
     database.ref('peers').on('value', (snapshot) => {
       const peers = snapshot.val() || {};
+      console.log('Peers in Firebase:', Object.keys(peers).length);
       
       let onlineCount = 0;
       
@@ -195,13 +209,13 @@ const signaling = {
         if (Date.now() - info.lastSeen > 30000) return;
         
         onlineCount++;
+        console.log('Found peer:', peerId, info.displayName);
         
         if (!state.peers.has(peerId)) {
           p2p.connectToPeer(peerId, info.displayName);
         }
       });
       
-      // Update peer count in header (Firebase-discovered peers)
       document.getElementById('peerCount').textContent = onlineCount;
     });
   }
@@ -213,9 +227,12 @@ const signaling = {
 
 const p2p = {
   async connectToPeer(peerId, displayName) {
-    if (state.peers.has(peerId)) return;
+    if (state.peers.has(peerId)) {
+      console.log('Already have connection to:', peerId);
+      return;
+    }
     
-    console.log('Connecting to peer:', peerId);
+    console.log('Creating connection to peer:', peerId);
     
     const pc = new RTCPeerConnection(rtcConfig);
     const dataChannel = pc.createDataChannel('messages', { ordered: true });
@@ -230,37 +247,53 @@ const p2p = {
     this.setupDataChannel(dataChannel, peerId);
     this.setupConnectionHandlers(pc, peerId);
     
-    // Wait for ICE candidates to gather
+    // ICE candidate handling
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log('Sending ICE candidate to:', peerId);
         signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
       }
     };
     
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
+    pc.onicegatheringstatechange = () => {
+      console.log('ICE gathering state:', pc.iceGatheringState);
+    };
     
-    // Wait a bit for ICE gathering
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    await signaling.sendSignal(peerId, 'offer', {
-      sdp: pc.localDescription.sdp,
-      type: pc.localDescription.type
-    });
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log('Created offer for:', peerId);
+      
+      await signaling.sendSignal(peerId, 'offer', {
+        sdp: pc.localDescription.sdp,
+        type: pc.localDescription.type
+      });
+    } catch (err) {
+      console.error('Error creating offer:', err);
+      state.peers.delete(peerId);
+    }
   },
   
   async handleOffer(peerId, displayName, offer) {
-    console.log('Received offer from:', peerId);
+    console.log('Handling offer from:', peerId);
     
-    // Check if we already have a connection attempt
+    // Check for existing connection
     if (state.peers.has(peerId)) {
       const existing = state.peers.get(peerId);
-      if (existing.connection.connectionState === 'failed') {
-        existing.connection.close();
-        state.peers.delete(peerId);
-      } else {
+      if (existing.connection.connectionState === 'connected') {
+        console.log('Already connected to:', peerId);
         return;
       }
+      if (existing.connection.connectionState !== 'failed' && 
+          existing.connection.connectionState !== 'closed') {
+        // Collision - lower peer ID wins
+        if (state.peerId < peerId) {
+          console.log('Ignoring offer due to collision, we initiated');
+          return;
+        }
+      }
+      existing.connection.close();
+      state.peers.delete(peerId);
     }
     
     const pc = new RTCPeerConnection(rtcConfig);
@@ -272,9 +305,12 @@ const p2p = {
     });
     
     pc.ondatachannel = (event) => {
+      console.log('Received data channel from:', peerId);
       const peer = state.peers.get(peerId);
-      peer.dataChannel = event.channel;
-      this.setupDataChannel(event.channel, peerId);
+      if (peer) {
+        peer.dataChannel = event.channel;
+        this.setupDataChannel(event.channel, peerId);
+      }
     };
     
     pc.onicecandidate = (event) => {
@@ -285,33 +321,44 @@ const p2p = {
     
     this.setupConnectionHandlers(pc, peerId);
     
-    await pc.setRemoteDescription(new RTCSessionDescription(offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    await signaling.sendSignal(peerId, 'answer', {
-      sdp: pc.localDescription.sdp,
-      type: pc.localDescription.type
-    });
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      console.log('Created answer for:', peerId);
+      
+      await signaling.sendSignal(peerId, 'answer', {
+        sdp: pc.localDescription.sdp,
+        type: pc.localDescription.type
+      });
+    } catch (err) {
+      console.error('Error handling offer:', err);
+      state.peers.delete(peerId);
+    }
   },
   
   async handleAnswer(peerId, answer) {
-    console.log('Received answer from:', peerId);
+    console.log('Handling answer from:', peerId);
     const peer = state.peers.get(peerId);
-    if (peer) {
-      await peer.connection.setRemoteDescription(new RTCSessionDescription(answer));
+    if (peer && peer.connection.signalingState === 'have-local-offer') {
+      try {
+        await peer.connection.setRemoteDescription(new RTCSessionDescription(answer));
+        console.log('Set remote description for:', peerId);
+      } catch (err) {
+        console.error('Error setting remote description:', err);
+      }
+    } else {
+      console.log('Cannot apply answer, state:', peer?.connection.signalingState);
     }
   },
   
   async handleIceCandidate(peerId, candidate) {
     const peer = state.peers.get(peerId);
-    if (peer && candidate) {
+    if (peer && candidate && peer.connection.remoteDescription) {
       try {
         await peer.connection.addIceCandidate(new RTCIceCandidate(candidate));
       } catch (e) {
-        // Ignore ICE errors - they're usually timing-related
+        // Ignore ICE errors
       }
     }
   },
@@ -327,32 +374,40 @@ const p2p = {
         updateConnectionStatus();
         updatePeerList();
       } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        console.log('Connection lost with:', peerId);
         state.peers.delete(peerId);
         updateConnectionStatus();
         updatePeerList();
       }
     };
+    
+    pc.oniceconnectionstatechange = () => {
+      console.log(`ICE connection state with ${peerId}:`, pc.iceConnectionState);
+    };
   },
   
   setupDataChannel(channel, peerId) {
+    console.log('Setting up data channel with:', peerId, 'state:', channel.readyState);
+    
     channel.onopen = () => {
-      console.log('Data channel opened with:', peerId);
+      console.log('✅ Data channel OPEN with:', peerId);
       updateConnectionStatus();
       updatePeerList();
       this.sendToPeer(peerId, { type: 'sync-request' });
     };
     
     channel.onmessage = (event) => {
+      console.log('Message from:', peerId);
       const message = JSON.parse(event.data);
       this.handleMessage(peerId, message);
     };
     
     channel.onerror = (error) => {
-      console.error('Data channel error:', error);
+      console.error('Data channel error with', peerId, ':', error);
     };
     
     channel.onclose = () => {
-      console.log('Data channel closed with:', peerId);
+      console.log('Data channel CLOSED with:', peerId);
       updateConnectionStatus();
       updatePeerList();
     };
@@ -575,9 +630,23 @@ function escapeHtml(text) {
 
 function setupEventListeners() {
   // Mobile menu
-  document.getElementById('mobileMenuBtn').onclick = () => {
-    document.getElementById('sidebar').classList.toggle('mobile-open');
-  };
+  const sidebar = document.getElementById('sidebar');
+  const menuBtn = document.getElementById('mobileMenuBtn');
+  
+  menuBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    sidebar.classList.toggle('mobile-open');
+    console.log('Menu toggled:', sidebar.classList.contains('mobile-open'));
+  });
+  
+  // Close sidebar when clicking outside
+  document.addEventListener('click', (e) => {
+    if (sidebar.classList.contains('mobile-open') && 
+        !sidebar.contains(e.target) && 
+        e.target !== menuBtn) {
+      sidebar.classList.remove('mobile-open');
+    }
+  });
   
   // Initial name modal
   document.getElementById('saveNameBtn').onclick = () => {
@@ -727,6 +796,10 @@ function updateUserUI() {
 // ============================================
 
 function initializeNetwork() {
+  console.log('=== P2P Social Initializing ===');
+  console.log('My peer ID:', state.peerId);
+  console.log('Display name:', state.displayName);
+  
   updateUserUI();
   updateConnectionStatus();
   
@@ -741,6 +814,8 @@ function initializeNetwork() {
     updateConnectionStatus();
     updatePeerList();
   }, 3000);
+  
+  console.log('=== Initialization complete ===');
 }
 
 function init() {
