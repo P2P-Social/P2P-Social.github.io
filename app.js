@@ -28,30 +28,18 @@ const state = {
 };
 
 // WebRTC Configuration with TURN servers
-const rtcConfig = {
+const rtcConfig = {const rtcConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun.relay.metered.ca:80' },
     {
-      urls: 'turn:global.relay.metered.ca:80',
-      username: 'e8dd65b92f6de3267ebb0134',
-      credential: 'XKuDNw8m0AsUdZqe'
+      urls: 'turn:108.161.143.143:3478',
+      username: 'p2psocial',
+      credential: 'ChangeThisPassword123'
     },
     {
-      urls: 'turn:global.relay.metered.ca:80?transport=tcp',
-      username: 'e8dd65b92f6de3267ebb0134',
-      credential: 'XKuDNw8m0AsUdZqe'
-    },
-    {
-      urls: 'turn:global.relay.metered.ca:443',
-      username: 'e8dd65b92f6de3267ebb0134',
-      credential: 'XKuDNw8m0AsUdZqe'
-    },
-    {
-      urls: 'turns:global.relay.metered.ca:443?transport=tcp',
-      username: 'e8dd65b92f6de3267ebb0134',
-      credential: 'XKuDNw8m0AsUdZqe'
+      urls: 'turn:108.161.143.143:3478?transport=tcp',
+      username: 'p2psocial',
+      credential: 'ChangeThisPassword123'
     }
   ],
   iceCandidatePoolSize: 10
