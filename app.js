@@ -24,13 +24,20 @@ const state = {
   peers: new Map(),
   posts: [],
   mediaQueue: [],
-  likes: new Set() // Track liked posts
+  likes: new Set(),
+  // Cache settings
+  maxPosts: 500,           // Max posts to keep
+  maxAgeHours: 72,         // Max age in hours (3 days)
+  syncInProgress: new Set() // Track ongoing syncs
 };
 
 // WebRTC Configuration with TURN servers
-const rtcConfig = {const rtcConfig = {
+const rtcConfig = {
   iceServers: [
+    // STUN servers
     { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    // Your TURN server
     {
       urls: 'turn:108.161.143.143:3478',
       username: 'p2psocial',
@@ -42,7 +49,8 @@ const rtcConfig = {const rtcConfig = {
       credential: 'ChangeThisPassword123'
     }
   ],
-  iceCandidatePoolSize: 10
+  iceCandidatePoolSize: 10,
+  iceTransportPolicy: 'all'
 };
 
 // ============================================
@@ -132,6 +140,97 @@ function on(id, event, handler) {
   } else {
     console.warn(`Element not found: ${id}`);
   }
+}
+
+// ============================================
+// Cache Management & Persistence
+// ============================================
+
+function pruneOldPosts() {
+  const now = Date.now();
+  const maxAge = state.maxAgeHours * 60 * 60 * 1000;
+  const before = state.posts.length;
+  
+  // Remove posts older than maxAge
+  state.posts = state.posts.filter(post => {
+    return (now - post.timestamp) < maxAge;
+  });
+  
+  // If still over limit, remove oldest
+  if (state.posts.length > state.maxPosts) {
+    // Sort by timestamp descending (newest first)
+    state.posts.sort((a, b) => b.timestamp - a.timestamp);
+    // Keep only maxPosts
+    state.posts = state.posts.slice(0, state.maxPosts);
+  }
+  
+  const removed = before - state.posts.length;
+  if (removed > 0) {
+    console.log(`🗑️ Pruned ${removed} old posts (${state.posts.length} remaining)`);
+    savePosts();
+    refreshFeed();
+  }
+}
+
+function savePosts() {
+  try {
+    // Save posts without media to reduce storage size
+    const postsToSave = state.posts.map(post => ({
+      ...post,
+      media: post.media ? post.media.map(m => ({
+        type: m.type,
+        // Truncate large media for storage (keep first 1000 chars as preview)
+        data: m.data.length > 50000 ? m.data.substring(0, 1000) + '...[truncated]' : m.data
+      })) : []
+    }));
+    localStorage.setItem('p2p-posts', JSON.stringify(postsToSave));
+  } catch (e) {
+    console.warn('Could not save posts to localStorage:', e.message);
+    // If quota exceeded, prune more aggressively
+    if (e.name === 'QuotaExceededError') {
+      state.maxPosts = Math.floor(state.maxPosts / 2);
+      pruneOldPosts();
+    }
+  }
+}
+
+function loadPosts() {
+  try {
+    const saved = localStorage.getItem('p2p-posts');
+    if (saved) {
+      const posts = JSON.parse(saved);
+      posts.forEach(post => {
+        if (!state.posts.some(p => p.id === post.id)) {
+          state.posts.push(post);
+        }
+      });
+      console.log(`📂 Loaded ${posts.length} posts from storage`);
+    }
+  } catch (e) {
+    console.warn('Could not load posts:', e.message);
+  }
+}
+
+function refreshFeed() {
+  const feed = document.getElementById('feed');
+  if (!feed) return;
+  
+  // Clear all posts except empty state
+  const emptyState = document.getElementById('emptyState');
+  feed.innerHTML = '';
+  if (emptyState) {
+    feed.appendChild(emptyState);
+    emptyState.style.display = state.posts.length === 0 ? 'block' : 'none';
+  }
+  
+  // Re-render all posts sorted by time (newest first)
+  const sortedPosts = [...state.posts].sort((a, b) => b.timestamp - a.timestamp);
+  sortedPosts.forEach(post => renderPost(post));
+}
+
+function getPostHashes() {
+  // Return array of post IDs and timestamps for efficient sync
+  return state.posts.map(p => ({ id: p.id, timestamp: p.timestamp }));
 }
 
 // ============================================
@@ -233,15 +332,24 @@ const signaling = {
     database.ref('peers').on('value', (snapshot) => {
       const peers = snapshot.val() || {};
       let onlineCount = 0;
+      const now = Date.now();
       
       Object.entries(peers).forEach(([peerId, info]) => {
         if (peerId === state.peerId) return;
-        if (Date.now() - info.lastSeen > 30000) return;
+        if (now - info.lastSeen > 30000) return; // Skip stale peers
         
         onlineCount++;
-        console.log('Found peer:', peerId, info.displayName);
         
-        if (!state.peers.has(peerId)) {
+        // Always try to connect to peers we're not connected to
+        const existingPeer = state.peers.get(peerId);
+        if (!existingPeer) {
+          console.log('🔍 Found new peer:', peerId, info.displayName);
+          p2p.connectToPeer(peerId, info.displayName);
+        } else if (existingPeer.connection.connectionState === 'failed' ||
+                   existingPeer.connection.connectionState === 'closed') {
+          // Retry failed connections
+          console.log('🔄 Retrying failed peer:', peerId);
+          state.peers.delete(peerId);
           p2p.connectToPeer(peerId, info.displayName);
         }
       });
@@ -249,6 +357,31 @@ const signaling = {
       const peerCountEl = document.getElementById('peerCount');
       if (peerCountEl) peerCountEl.textContent = onlineCount;
     });
+    
+    // Periodic connection check - ensure mesh connectivity
+    setInterval(() => {
+      database.ref('peers').once('value', (snapshot) => {
+        const peers = snapshot.val() || {};
+        const now = Date.now();
+        
+        Object.entries(peers).forEach(([peerId, info]) => {
+          if (peerId === state.peerId) return;
+          if (now - info.lastSeen > 30000) return;
+          
+          const existingPeer = state.peers.get(peerId);
+          const isConnected = existingPeer?.dataChannel?.readyState === 'open';
+          
+          if (!isConnected) {
+            console.log('🔗 Mesh check: connecting to', peerId);
+            if (existingPeer) {
+              existingPeer.connection.close();
+              state.peers.delete(peerId);
+            }
+            p2p.connectToPeer(peerId, info.displayName);
+          }
+        });
+      });
+    }, 15000); // Check every 15 seconds
   }
 };
 
@@ -277,8 +410,17 @@ const p2p = {
     
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const c = event.candidate.candidate;
+        const type = c.includes('relay') ? '🔄RELAY' : c.includes('srflx') ? '📡SRFLX' : '🏠HOST';
+        console.log(`ICE candidate ${type} for ${peerId}`);
         signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
+      } else {
+        console.log(`ICE gathering complete for ${peerId}`);
       }
+    };
+    
+    pc.onicegatheringstatechange = () => {
+      console.log(`ICE gathering: ${pc.iceGatheringState} for ${peerId}`);
     };
     
     try {
@@ -325,8 +467,15 @@ const p2p = {
     
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        const c = event.candidate.candidate;
+        const type = c.includes('relay') ? '🔄RELAY' : c.includes('srflx') ? '📡SRFLX' : '🏠HOST';
+        console.log(`ICE candidate ${type} for ${peerId} (answer)`);
         signaling.sendSignal(peerId, 'ice-candidate', event.candidate.toJSON());
       }
+    };
+    
+    pc.onicegatheringstatechange = () => {
+      console.log(`ICE gathering: ${pc.iceGatheringState} for ${peerId}`);
     };
     
     this.setupConnectionHandlers(pc, peerId);
@@ -371,37 +520,63 @@ const p2p = {
   
   setupConnectionHandlers(pc, peerId) {
     pc.onconnectionstatechange = () => {
-      console.log(`Connection state with ${peerId}:`, pc.connectionState);
+      console.log(`🔗 Connection state with ${peerId}:`, pc.connectionState);
       
       if (pc.connectionState === 'connected') {
         const peer = state.peers.get(peerId);
         if (peer) peer.connected = true;
+        console.log('✅ WebRTC CONNECTED to:', peerId);
         showToast('Peer connected!', 'success');
         updateConnectionStatus();
         updatePeerList();
-      } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+      } else if (pc.connectionState === 'failed') {
+        console.log('❌ Connection FAILED to:', peerId);
         state.peers.delete(peerId);
         updateConnectionStatus();
         updatePeerList();
+        // Will retry on next Firebase update
+      } else if (pc.connectionState === 'disconnected') {
+        console.log('⚠️ Connection DISCONNECTED from:', peerId);
+        // Give it a moment to reconnect
+        setTimeout(() => {
+          if (pc.connectionState === 'disconnected') {
+            state.peers.delete(peerId);
+            updateConnectionStatus();
+            updatePeerList();
+          }
+        }, 5000);
       }
     };
     
     pc.oniceconnectionstatechange = () => {
-      console.log(`ICE state with ${peerId}:`, pc.iceConnectionState);
+      console.log(`🧊 ICE state with ${peerId}:`, pc.iceConnectionState);
+      if (pc.iceConnectionState === 'failed') {
+        console.log('Attempting ICE restart...');
+        pc.restartIce();
+      }
     };
   },
   
   setupDataChannel(channel, peerId) {
     channel.onopen = () => {
       console.log('✅ Data channel OPEN with:', peerId);
+      const peerName = state.peers.get(peerId)?.info?.displayName || peerId;
+      showToast('Connected to ' + peerName, 'success');
       updateConnectionStatus();
       updatePeerList();
-      this.sendToPeer(peerId, { type: 'sync-request' });
+      
+      // Start bidirectional sync - send our post inventory
+      console.log('🔄 Starting sync with:', peerId);
+      this.sendToPeer(peerId, { 
+        type: 'sync-hashes', 
+        data: getPostHashes() 
+      });
     };
     
     channel.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data);
+        console.log('📨 Message from', peerId, ':', message.type);
         this.handleMessage(peerId, message);
       } catch (err) {
         console.error('Error parsing message:', err);
@@ -409,11 +584,11 @@ const p2p = {
     };
     
     channel.onerror = (error) => {
-      console.error('Data channel error:', error);
+      console.error('❌ Data channel error:', error);
     };
     
     channel.onclose = () => {
-      console.log('Data channel closed with:', peerId);
+      console.log('📪 Data channel closed with:', peerId);
       updateConnectionStatus();
       updatePeerList();
     };
@@ -449,13 +624,81 @@ const p2p = {
     
     switch (message.type) {
       case 'post':
+        console.log('📝 Received post from', fromPeerId);
         addPost(message.data, false);
         break;
+        
+      case 'sync-hashes':
+        // Peer sent their post inventory - find what they're missing and what we're missing
+        console.log('🔄 Received inventory from', fromPeerId, '-', message.data.length, 'posts');
+        
+        const theirHashes = new Set(message.data.map(p => p.id));
+        const ourHashes = new Set(state.posts.map(p => p.id));
+        
+        // Posts we have that they don't
+        const toSend = state.posts.filter(p => !theirHashes.has(p.id));
+        
+        // Posts they have that we don't
+        const theyHave = message.data.filter(p => !ourHashes.has(p.id)).map(p => p.id);
+        
+        console.log(`📊 Sync: sending ${toSend.length}, requesting ${theyHave.length}`);
+        
+        // Send posts they're missing
+        if (toSend.length > 0) {
+          this.sendToPeer(fromPeerId, { 
+            type: 'sync-posts', 
+            data: toSend 
+          });
+        }
+        
+        // Request posts we're missing
+        if (theyHave.length > 0) {
+          this.sendToPeer(fromPeerId, { 
+            type: 'sync-request-ids', 
+            data: theyHave 
+          });
+        }
+        break;
+        
+      case 'sync-posts':
+        // Received bulk posts
+        console.log('📦 Received', message.data.length, 'posts from', fromPeerId);
+        let added = 0;
+        message.data.forEach(post => {
+          if (!state.posts.some(p => p.id === post.id)) {
+            state.posts.push(post);
+            renderPost(post);
+            added++;
+          }
+        });
+        if (added > 0) {
+          console.log(`✅ Added ${added} new posts`);
+          document.getElementById('emptyState').style.display = 'none';
+          savePosts();
+          pruneOldPosts();
+        }
+        break;
+        
+      case 'sync-request-ids':
+        // Peer requesting specific posts by ID
+        const requestedPosts = state.posts.filter(p => message.data.includes(p.id));
+        console.log('📤 Sending', requestedPosts.length, 'requested posts to', fromPeerId);
+        if (requestedPosts.length > 0) {
+          this.sendToPeer(fromPeerId, { 
+            type: 'sync-posts', 
+            data: requestedPosts 
+          });
+        }
+        break;
+        
       case 'sync-request':
+        // Legacy: send all posts (for backwards compatibility)
+        console.log('🔄 Legacy sync requested by', fromPeerId, '- sending', state.posts.length, 'posts');
         state.posts.forEach(post => {
           this.sendToPeer(fromPeerId, { type: 'post', data: post });
         });
         break;
+        
       case 'name-change':
         const peer = state.peers.get(fromPeerId);
         if (peer) {
@@ -510,6 +753,8 @@ const p2p = {
 function updateConnectionStatus() {
   const dot = document.getElementById('connectionDot');
   const text = document.getElementById('connectionStatus');
+  const postBadge = document.getElementById('postCountBadge');
+  
   if (!dot || !text) return;
   
   let connectedCount = 0;
@@ -523,6 +768,11 @@ function updateConnectionStatus() {
     text.textContent = 'Connected';
   } else {
     text.textContent = 'Searching...';
+  }
+  
+  // Update post count
+  if (postBadge) {
+    postBadge.textContent = state.posts.length;
   }
 }
 
@@ -578,7 +828,15 @@ function updateUserUI() {
 // ============================================
 
 function addPost(post, broadcast = true) {
+  // Check if we already have this post
   if (state.posts.some(p => p.id === post.id)) return;
+  
+  // Check if post is too old
+  const maxAge = state.maxAgeHours * 60 * 60 * 1000;
+  if (Date.now() - post.timestamp > maxAge) {
+    console.log('⏰ Skipping old post:', post.id);
+    return;
+  }
   
   state.posts.push(post);
   
@@ -586,6 +844,14 @@ function addPost(post, broadcast = true) {
   if (emptyState) emptyState.style.display = 'none';
   
   renderPost(post);
+  
+  // Save to localStorage
+  savePosts();
+  
+  // Prune if over limit
+  if (state.posts.length > state.maxPosts) {
+    pruneOldPosts();
+  }
   
   if (broadcast) {
     p2p.broadcast({ type: 'post', data: post });
@@ -860,6 +1126,11 @@ function initializeNetwork() {
   console.log('=== P2P Social Initializing ===');
   console.log('Peer ID:', state.peerId);
   console.log('Display name:', state.displayName);
+  console.log('Cache settings: max', state.maxPosts, 'posts,', state.maxAgeHours, 'hours max age');
+  
+  // Load saved posts
+  loadPosts();
+  refreshFeed();
   
   updateUserUI();
   updateConnectionStatus();
@@ -873,11 +1144,36 @@ function initializeNetwork() {
   // Check URL for post link
   checkUrlForPost();
   
-  // Periodic UI update
+  // Periodic tasks
   setInterval(() => {
     updateConnectionStatus();
     updatePeerList();
   }, 3000);
+  
+  // Prune old posts every 5 minutes
+  setInterval(() => {
+    pruneOldPosts();
+  }, 5 * 60 * 1000);
+  
+  // Re-sync with all connected peers every 30 seconds
+  setInterval(() => {
+    let connectedCount = 0;
+    state.peers.forEach((peer, peerId) => {
+      if (peer.dataChannel?.readyState === 'open') {
+        connectedCount++;
+        // Send updated inventory
+        p2p.sendToPeer(peerId, { 
+          type: 'sync-hashes', 
+          data: getPostHashes() 
+        });
+      }
+    });
+    if (connectedCount > 0) {
+      console.log(`🔄 Periodic sync with ${connectedCount} peers`);
+    }
+  }, 30000);
+  
+  console.log('=== Initialization complete ===');
 }
 
 function init() {

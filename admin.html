@@ -250,8 +250,9 @@
     <button onclick="refreshAll()">🔄 Refresh All</button>
     <button onclick="runConnectionTests()">🧪 Run Connection Tests</button>
     <button onclick="exportData()">📤 Export Data</button>
-    <button onclick="clearLocalData()" class="danger">🗑️ Clear Local Data</button>
-    <button onclick="clearFirebaseSignals()" class="danger">🧹 Clear Stale Signals</button>
+    <button onclick="clearLocalPosts()" class="danger">🗑️ Clear Local Posts</button>
+    <button onclick="clearLocalData()" class="danger">🧹 Clear All Local Data</button>
+    <button onclick="clearFirebaseSignals()" class="danger">⚡ Clear Stale Signals</button>
   </div>
   
   <div class="grid">
@@ -268,9 +269,9 @@
     </div>
     
     <div class="card">
-      <h2>📝 Posts</h2>
+      <h2>📝 Posts (Local Cache)</h2>
       <div class="stat" id="postCount">0</div>
-      <div class="stat-label">Total Posts in Network</div>
+      <div class="stat-label">Posts in local storage (max 500, 72hr)</div>
     </div>
     
     <div class="card">
@@ -303,6 +304,10 @@
         <span class="status-label">Display Name</span>
         <span class="status-value" id="myName">-</span>
       </div>
+      <div class="status-row">
+        <span class="status-label">Local Posts</span>
+        <span class="status-value" id="localPostCount">-</span>
+      </div>
     </div>
     
     <div class="card">
@@ -313,7 +318,11 @@
           <div class="test-status" id="testStun"></div>
         </div>
         <div class="test-item">
-          <span>TURN Server (Metered)</span>
+          <span>TURN (Your Server)</span>
+          <div class="test-status" id="testTurnOpen"></div>
+        </div>
+        <div class="test-item">
+          <span>TURN TCP (Your Server)</span>
           <div class="test-status" id="testTurn"></div>
         </div>
         <div class="test-item">
@@ -422,6 +431,14 @@
       // Peer info
       document.getElementById('myPeerId').textContent = localStorage.getItem('p2p-peerId') || 'Not set';
       document.getElementById('myName').textContent = localStorage.getItem('p2p-displayName') || 'Not set';
+      
+      // Local posts
+      try {
+        const posts = JSON.parse(localStorage.getItem('p2p-posts') || '[]');
+        document.getElementById('localPostCount').textContent = posts.length + ' posts';
+      } catch (e) {
+        document.getElementById('localPostCount').textContent = 'Error reading';
+      }
     }
     
     // Firebase monitoring
@@ -505,7 +522,7 @@
       log('Starting connection tests...', 'info');
       
       // Reset all
-      ['testStun', 'testTurn', 'testFirebase', 'testDataChannel'].forEach(id => {
+      ['testStun', 'testTurnOpen', 'testTurn', 'testFirebase', 'testDataChannel'].forEach(id => {
         document.getElementById(id).className = 'test-status testing';
       });
       
@@ -534,13 +551,44 @@
         log('STUN test failed: ' + e.message, 'error');
       }
       
-      // Test TURN
+      // Test Your TURN (UDP)
       try {
         const pc = new RTCPeerConnection({
           iceServers: [{
-            urls: 'turn:global.relay.metered.ca:80',
-            username: 'e8dd65b92f6de3267ebb0134',
-            credential: 'XKuDNw8m0AsUdZqe'
+            urls: 'turn:108.161.143.143:3478',
+            username: 'p2psocial',
+            credential: 'ChangeThisPassword123'
+          }]
+        });
+        pc.createDataChannel('test');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Timeout')), 5000);
+          pc.onicecandidate = (e) => {
+            if (e.candidate && e.candidate.candidate.includes('relay')) {
+              clearTimeout(timeout);
+              resolve();
+            }
+          };
+        });
+        
+        pc.close();
+        document.getElementById('testTurnOpen').className = 'test-status pass';
+        log('Your TURN (UDP) test passed', 'info');
+      } catch (e) {
+        document.getElementById('testTurnOpen').className = 'test-status fail';
+        log('Your TURN (UDP) test failed: ' + e.message, 'warn');
+      }
+      
+      // Test Your TURN (TCP)
+      try {
+        const pc = new RTCPeerConnection({
+          iceServers: [{
+            urls: 'turn:108.161.143.143:3478?transport=tcp',
+            username: 'p2psocial',
+            credential: 'ChangeThisPassword123'
           }]
         });
         pc.createDataChannel('test');
@@ -559,10 +607,10 @@
         
         pc.close();
         document.getElementById('testTurn').className = 'test-status pass';
-        log('TURN test passed', 'info');
+        log('Your TURN (TCP) test passed', 'info');
       } catch (e) {
         document.getElementById('testTurn').className = 'test-status fail';
-        log('TURN test failed: ' + e.message, 'warn');
+        log('Your TURN (TCP) test failed: ' + e.message, 'warn');
       }
       
       // Test Firebase
@@ -656,7 +704,16 @@
         localStorage.removeItem('p2p-peerId');
         localStorage.removeItem('p2p-displayName');
         localStorage.removeItem('p2p-likes');
+        localStorage.removeItem('p2p-posts');
         log('Local data cleared', 'warn');
+        checkSystemStatus();
+      }
+    }
+    
+    function clearLocalPosts() {
+      if (confirm('Clear all locally stored posts?')) {
+        localStorage.removeItem('p2p-posts');
+        log('Local posts cleared', 'warn');
         checkSystemStatus();
       }
     }
