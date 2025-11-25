@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Social Protocol Specification</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-dim: #8b949e;
+            --accent: #58a6ff;
+            --accent2: #f778ba;
+            --green: #3fb950;
+            --orange: #d29922;
+            --red: #f85149;
+            --purple: #a371f7;
+        }
+        
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        
+        header {
+            text-align: center;
+            padding: 60px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 40px;
+        }
+        
+        header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 15px;
+        }
+        
+        header .subtitle {
+            color: var(--text-dim);
+            font-size: 1.1rem;
+        }
+        
+        header .version {
+            display: inline-block;
+            background: var(--card);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            margin-top: 15px;
+            border: 1px solid var(--border);
+        }
+        
+        nav {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 40px;
+            border: 1px solid var(--border);
+        }
+        
+        nav h3 {
+            color: var(--accent);
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        nav ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        
+        nav a {
+            color: var(--text);
+            text-decoration: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            display: block;
+            transition: background 0.2s;
+        }
+        
+        nav a:hover {
+            background: rgba(88, 166, 255, 0.1);
+            color: var(--accent);
+        }
+        
+        section {
+            margin-bottom: 50px;
+        }
+        
+        h2 {
+            font-size: 1.8rem;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--border);
+            color: var(--accent);
+        }
+        
+        h3 {
+            font-size: 1.3rem;
+            margin: 30px 0 15px;
+            color: var(--text);
+        }
+        
+        h4 {
+            font-size: 1rem;
+            margin: 20px 0 10px;
+            color: var(--accent2);
+        }
+        
+        p {
+            margin-bottom: 15px;
+            color: var(--text-dim);
+        }
+        
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .card-header .icon {
+            font-size: 1.5rem;
+        }
+        
+        .card-header h4 {
+            margin: 0;
+            color: var(--text);
+        }
+        
+        pre {
+            background: #0d1117;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin: 15px 0;
+        }
+        
+        code {
+            font-family: 'SF Mono', 'Consolas', monospace;
+            background: rgba(110, 118, 129, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        
+        .json-key { color: var(--accent); }
+        .json-string { color: var(--green); }
+        .json-number { color: var(--orange); }
+        .json-boolean { color: var(--purple); }
+        .json-null { color: var(--red); }
+        .comment { color: var(--text-dim); font-style: italic; }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        th, td {
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        th {
+            background: var(--card);
+            color: var(--accent);
+            font-weight: 600;
+        }
+        
+        tr:hover td {
+            background: rgba(88, 166, 255, 0.05);
+        }
+        
+        .diagram {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 30px;
+            margin: 20px 0;
+            font-family: 'SF Mono', 'Consolas', monospace;
+            font-size: 0.85rem;
+            overflow-x: auto;
+            white-space: pre;
+            line-height: 1.4;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .badge-firebase { background: #FFCA28; color: #000; }
+        .badge-webrtc { background: var(--green); color: #000; }
+        .badge-required { background: var(--red); color: #fff; }
+        .badge-optional { background: var(--text-dim); color: #fff; }
+        
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            margin: 20px 0;
+            padding: 20px;
+            background: var(--card);
+            border-radius: 12px;
+            border-left: 4px solid var(--accent);
+        }
+        
+        .flow-step .number {
+            background: var(--accent);
+            color: #000;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        
+        .flow-step .content h4 {
+            margin: 0 0 5px;
+            color: var(--text);
+        }
+        
+        .flow-step .content p {
+            margin: 0;
+        }
+        
+        .two-col {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 40px;
+            border-top: 1px solid var(--border);
+            margin-top: 60px;
+            color: var(--text-dim);
+        }
+        
+        footer a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        
+        @media (max-width: 600px) {
+            header h1 { font-size: 1.8rem; }
+            pre { font-size: 0.8rem; padding: 15px; }
+            .diagram { font-size: 0.7rem; padding: 15px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📡 P2P Social Protocol</h1>
+            <p class="subtitle">Firebase Signaling & WebRTC Data Format Specification</p>
+            <span class="version">Version 2.0.0 • November 2024</span>
+        </header>
+        
+        <nav>
+            <h3>📑 Contents</h3>
+            <ul>
+                <li><a href="#overview">Overview</a></li>
+                <li><a href="#architecture">Architecture</a></li>
+                <li><a href="#firebase">Firebase Data Format</a></li>
+                <li><a href="#signaling">Signaling Flow</a></li>
+                <li><a href="#webrtc">WebRTC Messages</a></li>
+                <li><a href="#sync">Sync Protocol</a></li>
+                <li><a href="#posts">Post Format</a></li>
+                <li><a href="#media">Media Handling</a></li>
+            </ul>
+        </nav>
+        
+        <!-- Overview Section -->
+        <section id="overview">
+            <h2>🌐 Overview</h2>
+            <p>P2P Social uses a hybrid architecture combining Firebase Realtime Database for peer discovery and signaling, with WebRTC DataChannels for direct peer-to-peer communication.</p>
+            
+            <div class="diagram">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           P2P SOCIAL NETWORK                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐          │
+│   │ Browser  │     │ Browser  │     │ Browser  │     │ Browser  │          │
+│   │  Tab A   │◄───►│  Tab B   │◄───►│  Tab C   │◄───►│  Tab D   │          │
+│   └────┬─────┘     └────┬─────┘     └────┬─────┘     └────┬─────┘          │
+│        │                │                │                │                 │
+│        │    WebRTC DataChannels (Direct P2P)             │                 │
+│        │                │                │                │                 │
+│        └────────────────┴────────────────┴────────────────┘                 │
+│                                  │                                          │
+│                          Firebase Signaling                                 │
+│                          (Discovery + ICE)                                  │
+│                                  │                                          │
+│                    ┌─────────────┴─────────────┐                            │
+│                    │   Firebase Realtime DB    │                            │
+│                    │  ┌─────────────────────┐  │                            │
+│                    │  │ /peers              │  │                            │
+│                    │  │ /signals            │  │                            │
+│                    │  └─────────────────────┘  │                            │
+│                    └───────────────────────────┘                            │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+            </div>
+        </section>
+        
+        <!-- Architecture Section -->
+        <section id="architecture">
+            <h2>🏗️ Architecture</h2>
+            
+            <div class="two-col">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">🔥</span>
+                        <h4>Firebase (Signaling)</h4>
+                        <span class="badge badge-firebase">Ephemeral</span>
+                    </div>
+                    <ul style="color: var(--text-dim); padding-left: 20px;">
+                        <li>Peer presence/discovery</li>
+                        <li>WebRTC offer/answer exchange</li>
+                        <li>ICE candidate relay</li>
+                        <li>Auto-cleanup old signals</li>
+                    </ul>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">🔗</span>
+                        <h4>WebRTC (Data)</h4>
+                        <span class="badge badge-webrtc">Persistent</span>
+                    </div>
+                    <ul style="color: var(--text-dim); padding-left: 20px;">
+                        <li>Direct peer-to-peer messaging</li>
+                        <li>Post synchronization</li>
+                        <li>Media transfer</li>
+                        <li>Real-time updates</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <h3>Connection Limits</h3>
+            <table>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Value</th>
+                    <th>Notes</th>
+                </tr>
+                <tr>
+                    <td>Max active peers</td>
+                    <td>6-10</td>
+                    <td>Mesh topology</td>
+                </tr>
+                <tr>
+                    <td>Heartbeat interval</td>
+                    <td>30 seconds</td>
+                    <td>Firebase presence</td>
+                </tr>
+                <tr>
+                    <td>Peer timeout</td>
+                    <td>120 seconds</td>
+                    <td>Considered offline</td>
+                </tr>
+                <tr>
+                    <td>Sync interval</td>
+                    <td>30 seconds</td>
+                    <td>Periodic full sync</td>
+                </tr>
+            </table>
+        </section>
+        
+        <!-- Firebase Section -->
+        <section id="firebase">
+            <h2>🔥 Firebase Data Format</h2>
+            
+            <h3>Database Structure</h3>
+            <div class="diagram">
+firebase-root/
+├── peers/
+│   └── {peer_id}/
+│       ├── id: string
+│       ├── name: string
+│       ├── timestamp: number
+│       └── type: string (optional)
+│
+└── signals/
+    └── {target_peer_id}/
+        └── {signal_id}/
+            ├── from: string
+            ├── type: "offer" | "answer" | "ice-candidate"
+            ├── timestamp: number
+            └── [payload based on type]
+            </div>
+            
+            <h3>Peer Presence Record</h3>
+            <p>Written to <code>/peers/{peer_id}</code> on connect and updated every 30 seconds.</p>
+            <pre><code>{
+  <span class="json-key">"id"</span>: <span class="json-string">"peer_abc123xyz789"</span>,
+  <span class="json-key">"name"</span>: <span class="json-string">"John's Phone"</span>,
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400000</span>,
+  <span class="json-key">"type"</span>: <span class="json-string">"browser"</span>  <span class="comment">// or "bridge" for server nodes</span>
+}</code></pre>
+            
+            <h3>Signal Records</h3>
+            
+            <h4>WebRTC Offer</h4>
+            <p>Written to <code>/signals/{target_peer_id}/{unique_id}</code></p>
+            <pre><code>{
+  <span class="json-key">"from"</span>: <span class="json-string">"peer_abc123xyz789"</span>,
+  <span class="json-key">"type"</span>: <span class="json-string">"offer"</span>,
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400000</span>,
+  <span class="json-key">"sdp"</span>: {
+    <span class="json-key">"type"</span>: <span class="json-string">"offer"</span>,
+    <span class="json-key">"sdp"</span>: <span class="json-string">"v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\n..."</span>
+  }
+}</code></pre>
+            
+            <h4>WebRTC Answer</h4>
+            <pre><code>{
+  <span class="json-key">"from"</span>: <span class="json-string">"peer_def456uvw012"</span>,
+  <span class="json-key">"type"</span>: <span class="json-string">"answer"</span>,
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1732550401000</span>,
+  <span class="json-key">"sdp"</span>: {
+    <span class="json-key">"type"</span>: <span class="json-string">"answer"</span>,
+    <span class="json-key">"sdp"</span>: <span class="json-string">"v=0\r\no=- 9876543210 2 IN IP4 127.0.0.1\r\n..."</span>
+  }
+}</code></pre>
+            
+            <h4>ICE Candidate</h4>
+            <pre><code>{
+  <span class="json-key">"from"</span>: <span class="json-string">"peer_abc123xyz789"</span>,
+  <span class="json-key">"type"</span>: <span class="json-string">"ice-candidate"</span>,
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400500</span>,
+  <span class="json-key">"candidate"</span>: {
+    <span class="json-key">"candidate"</span>: <span class="json-string">"candidate:1 1 UDP 2122252543 192.168.1.100 54321 typ host"</span>,
+    <span class="json-key">"sdpMid"</span>: <span class="json-string">"0"</span>,
+    <span class="json-key">"sdpMLineIndex"</span>: <span class="json-number">0</span>
+  }
+}</code></pre>
+            
+            <h3>Firebase Security Rules</h3>
+            <pre><code>{
+  <span class="json-key">"rules"</span>: {
+    <span class="json-key">"peers"</span>: {
+      <span class="json-key">"$peerId"</span>: {
+        <span class="json-key">".read"</span>: <span class="json-boolean">true</span>,
+        <span class="json-key">".write"</span>: <span class="json-boolean">true</span>
+      }
+    },
+    <span class="json-key">"signals"</span>: {
+      <span class="json-key">"$peerId"</span>: {
+        <span class="json-key">".read"</span>: <span class="json-boolean">true</span>,
+        <span class="json-key">".write"</span>: <span class="json-boolean">true</span>
+      }
+    }
+  }
+}</code></pre>
+        </section>
+        
+        <!-- Signaling Flow Section -->
+        <section id="signaling">
+            <h2>🤝 Signaling Flow</h2>
+            
+            <p>Complete flow for establishing a WebRTC connection between two peers:</p>
+            
+            <div class="diagram">
+     Peer A                    Firebase                    Peer B
+       │                          │                          │
+       │  1. Write presence       │                          │
+       │─────────────────────────►│                          │
+       │                          │                          │
+       │                          │  2. Watch /peers         │
+       │                          │◄─────────────────────────│
+       │                          │                          │
+       │                          │  3. Peer A discovered    │
+       │                          │─────────────────────────►│
+       │                          │                          │
+       │  4. Create RTCPeerConnection                        │
+       │                          │                          │
+       │  5. Create DataChannel   │                          │
+       │                          │                          │
+       │  6. Create Offer         │                          │
+       │                          │                          │
+       │  7. Write offer to       │                          │
+       │     /signals/peerB/      │                          │
+       │─────────────────────────►│                          │
+       │                          │  8. Offer received       │
+       │                          │─────────────────────────►│
+       │                          │                          │
+       │                          │        9. Create Answer  │
+       │                          │                          │
+       │                          │  10. Write answer to     │
+       │  11. Answer received     │      /signals/peerA/     │
+       │◄─────────────────────────│◄─────────────────────────│
+       │                          │                          │
+       │  ─ ─ ─ ICE Candidates exchanged ─ ─ ─               │
+       │                          │                          │
+       │◄════════════════════════════════════════════════════►│
+       │          12. WebRTC DataChannel Connected           │
+       │                          │                          │
+       │  13. Delete signals      │                          │
+       │─────────────────────────►│                          │
+            </div>
+            
+            <div class="flow-step">
+                <div class="number">1</div>
+                <div class="content">
+                    <h4>Announce Presence</h4>
+                    <p>Peer writes its info to <code>/peers/{peer_id}</code> and starts heartbeat timer.</p>
+                </div>
+            </div>
+            
+            <div class="flow-step">
+                <div class="number">2</div>
+                <div class="content">
+                    <h4>Discover Peers</h4>
+                    <p>Listen on <code>/peers</code> for other active peers (timestamp within 120 seconds).</p>
+                </div>
+            </div>
+            
+            <div class="flow-step">
+                <div class="number">3</div>
+                <div class="content">
+                    <h4>Collision Resolution</h4>
+                    <p>To avoid duplicate connections, only the peer with the <strong>lower peer_id</strong> initiates the connection.</p>
+                </div>
+            </div>
+            
+            <div class="flow-step">
+                <div class="number">4</div>
+                <div class="content">
+                    <h4>Exchange Signals</h4>
+                    <p>Offer, Answer, and ICE Candidates are written to <code>/signals/{target_peer_id}/</code></p>
+                </div>
+            </div>
+            
+            <div class="flow-step">
+                <div class="number">5</div>
+                <div class="content">
+                    <h4>Cleanup</h4>
+                    <p>Once connected, signals are deleted from Firebase. Data now flows directly via WebRTC.</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- WebRTC Messages Section -->
+        <section id="webrtc">
+            <h2>📨 WebRTC Message Format</h2>
+            
+            <p>All messages sent over WebRTC DataChannels are JSON-encoded strings with a <code>type</code> field.</p>
+            
+            <h3>Message Types</h3>
+            <table>
+                <tr>
+                    <th>Type</th>
+                    <th>Direction</th>
+                    <th>Purpose</th>
+                </tr>
+                <tr>
+                    <td><code>post</code></td>
+                    <td>Broadcast</td>
+                    <td>New post created</td>
+                </tr>
+                <tr>
+                    <td><code>sync-request</code></td>
+                    <td>Request</td>
+                    <td>Request inventory from peer</td>
+                </tr>
+                <tr>
+                    <td><code>sync-hashes</code></td>
+                    <td>Response</td>
+                    <td>Send post hashes/IDs for comparison</td>
+                </tr>
+                <tr>
+                    <td><code>request-posts</code></td>
+                    <td>Request</td>
+                    <td>Request specific posts by ID</td>
+                </tr>
+                <tr>
+                    <td><code>sync-posts</code></td>
+                    <td>Response</td>
+                    <td>Send full post objects</td>
+                </tr>
+                <tr>
+                    <td><code>like</code></td>
+                    <td>Broadcast</td>
+                    <td>Like action on a post</td>
+                </tr>
+                <tr>
+                    <td><code>request-media</code></td>
+                    <td>Request</td>
+                    <td>Request media by hash</td>
+                </tr>
+                <tr>
+                    <td><code>media-data</code></td>
+                    <td>Response</td>
+                    <td>Send media blob</td>
+                </tr>
+            </table>
+            
+            <h3>New Post Message</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"post"</span>,
+  <span class="json-key">"post"</span>: {
+    <span class="json-key">"id"</span>: <span class="json-string">"post_1732550400000_abc123"</span>,
+    <span class="json-key">"author"</span>: <span class="json-string">"John S"</span>,
+    <span class="json-key">"peerId"</span>: <span class="json-string">"peer_abc123xyz789"</span>,
+    <span class="json-key">"content"</span>: <span class="json-string">"Hello, decentralized world! 🌍"</span>,
+    <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400000</span>,
+    <span class="json-key">"likes"</span>: <span class="json-number">0</span>,
+    <span class="json-key">"likedBy"</span>: [],
+    <span class="json-key">"replyTo"</span>: <span class="json-null">null</span>,
+    <span class="json-key">"media"</span>: []
+  }
+}</code></pre>
+            
+            <h3>Sync Request</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"sync-request"</span>
+}</code></pre>
+            
+            <h3>Sync Hashes Response</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"sync-hashes"</span>,
+  <span class="json-key">"hashes"</span>: [
+    { <span class="json-key">"id"</span>: <span class="json-string">"post_1732550400000_abc"</span>, <span class="json-key">"hash"</span>: <span class="json-string">"a1b2c3d4"</span> },
+    { <span class="json-key">"id"</span>: <span class="json-string">"post_1732550300000_def"</span>, <span class="json-key">"hash"</span>: <span class="json-string">"e5f6g7h8"</span> },
+    { <span class="json-key">"id"</span>: <span class="json-string">"post_1732550200000_ghi"</span>, <span class="json-key">"hash"</span>: <span class="json-string">"i9j0k1l2"</span> }
+  ]
+}</code></pre>
+            
+            <h3>Request Posts</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"request-posts"</span>,
+  <span class="json-key">"ids"</span>: [
+    <span class="json-string">"post_1732550400000_abc"</span>,
+    <span class="json-string">"post_1732550300000_def"</span>
+  ]
+}</code></pre>
+            
+            <h3>Sync Posts Response</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"sync-posts"</span>,
+  <span class="json-key">"posts"</span>: [
+    {
+      <span class="json-key">"id"</span>: <span class="json-string">"post_1732550400000_abc"</span>,
+      <span class="json-key">"author"</span>: <span class="json-string">"Alice"</span>,
+      <span class="json-key">"content"</span>: <span class="json-string">"First post!"</span>,
+      <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400000</span>,
+      <span class="json-key">"likes"</span>: <span class="json-number">5</span>,
+      <span class="json-key">"media"</span>: []
+    }
+  ]
+}</code></pre>
+            
+            <h3>Like Message</h3>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"like"</span>,
+  <span class="json-key">"postId"</span>: <span class="json-string">"post_1732550400000_abc"</span>,
+  <span class="json-key">"peerId"</span>: <span class="json-string">"peer_abc123xyz789"</span>,
+  <span class="json-key">"action"</span>: <span class="json-string">"add"</span>  <span class="comment">// or "remove"</span>
+}</code></pre>
+        </section>
+        
+        <!-- Sync Protocol Section -->
+        <section id="sync">
+            <h2>🔄 Sync Protocol</h2>
+            
+            <p>Bidirectional synchronization ensures all peers eventually have the same posts.</p>
+            
+            <div class="diagram">
+     Peer A                                            Peer B
+       │                                                 │
+       │  1. sync-request                                │
+       │────────────────────────────────────────────────►│
+       │                                                 │
+       │                     2. sync-hashes              │
+       │◄────────────────────────────────────────────────│
+       │     (B sends list of all post IDs it has)       │
+       │                                                 │
+       │  3. Compare hashes                              │
+       │     - Find posts A has that B doesn't           │
+       │     - Find posts B has that A doesn't           │
+       │                                                 │
+       │  4. request-posts (IDs A needs)                 │
+       │────────────────────────────────────────────────►│
+       │                                                 │
+       │                     5. sync-posts               │
+       │◄────────────────────────────────────────────────│
+       │     (B sends full posts A requested)            │
+       │                                                 │
+       │  6. sync-posts (posts B doesn't have)           │
+       │────────────────────────────────────────────────►│
+       │                                                 │
+       │  ═══════════ Both peers now in sync ═══════════ │
+            </div>
+            
+            <h3>Sync Triggers</h3>
+            <ul style="color: var(--text-dim); padding-left: 20px; margin: 15px 0;">
+                <li><strong>On DataChannel open</strong> - Immediate sync with new peer</li>
+                <li><strong>Periodic timer</strong> - Every 30 seconds with all connected peers</li>
+                <li><strong>Mesh check</strong> - Every 15 seconds, ensure connected to enough peers</li>
+            </ul>
+        </section>
+        
+        <!-- Post Format Section -->
+        <section id="posts">
+            <h2>📝 Post Format</h2>
+            
+            <h3>Full Post Object</h3>
+            <pre><code>{
+  <span class="json-key">"id"</span>: <span class="json-string">"post_1732550400000_abc123"</span>,       <span class="comment">// Unique ID: timestamp + random</span>
+  <span class="json-key">"author"</span>: <span class="json-string">"John Sokol"</span>,                   <span class="comment">// Display name</span>
+  <span class="json-key">"peerId"</span>: <span class="json-string">"peer_abc123xyz789"</span>,            <span class="comment">// Origin peer ID</span>
+  <span class="json-key">"content"</span>: <span class="json-string">"Hello world! @alice"</span>,          <span class="comment">// Post text (supports @mentions)</span>
+  <span class="json-key">"timestamp"</span>: <span class="json-number">1732550400000</span>,               <span class="comment">// Unix timestamp (ms)</span>
+  <span class="json-key">"likes"</span>: <span class="json-number">42</span>,                               <span class="comment">// Like count</span>
+  <span class="json-key">"likedBy"</span>: [<span class="json-string">"peer_x"</span>, <span class="json-string">"peer_y"</span>],           <span class="comment">// Peer IDs who liked</span>
+  <span class="json-key">"replyTo"</span>: <span class="json-string">"post_1732550300000_xyz"</span>,      <span class="comment">// Parent post ID (null if top-level)</span>
+  <span class="json-key">"replyCount"</span>: <span class="json-number">3</span>,                          <span class="comment">// Number of replies</span>
+  <span class="json-key">"media"</span>: [                                 <span class="comment">// Attached media</span>
+    {
+      <span class="json-key">"type"</span>: <span class="json-string">"image"</span>,                       <span class="comment">// "image" or "video"</span>
+      <span class="json-key">"hash"</span>: <span class="json-string">"a1b2c3d4e5f6g7h8"</span>,          <span class="comment">// Content hash for IndexedDB lookup</span>
+      <span class="json-key">"data"</span>: <span class="json-string">"data:image/jpeg;base64,..."</span> <span class="comment">// Base64 data (or null if stored separately)</span>
+    }
+  ]
+}</code></pre>
+            
+            <h3>Post ID Format</h3>
+            <p>Post IDs are generated as: <code>post_{timestamp}_{random}</code></p>
+            <pre><code><span class="comment">// JavaScript generation:</span>
+const postId = `post_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;</code></pre>
+        </section>
+        
+        <!-- Media Handling Section -->
+        <section id="media">
+            <h2>🖼️ Media Handling</h2>
+            
+            <h3>Storage Strategy</h3>
+            <div class="two-col">
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">📦</span>
+                        <h4>In-Post (Small Media)</h4>
+                    </div>
+                    <p>Media &lt; 50KB stored directly in post as base64 data URL.</p>
+                </div>
+                
+                <div class="card">
+                    <div class="card-header">
+                        <span class="icon">💾</span>
+                        <h4>IndexedDB (Large Media)</h4>
+                    </div>
+                    <p>Media &gt; 50KB stored in IndexedDB, post contains only hash reference.</p>
+                </div>
+            </div>
+            
+            <h3>Media Request Flow</h3>
+            <pre><code><span class="comment">// 1. Request media by hash</span>
+{
+  <span class="json-key">"type"</span>: <span class="json-string">"request-media"</span>,
+  <span class="json-key">"hash"</span>: <span class="json-string">"a1b2c3d4e5f6g7h8"</span>
+}
+
+<span class="comment">// 2. Receive media data</span>
+{
+  <span class="json-key">"type"</span>: <span class="json-string">"media-data"</span>,
+  <span class="json-key">"hash"</span>: <span class="json-string">"a1b2c3d4e5f6g7h8"</span>,
+  <span class="json-key">"data"</span>: <span class="json-string">"data:image/jpeg;base64,/9j/4AAQSkZJRg..."</span>
+}</code></pre>
+            
+            <h3>Chunked Transfer (Large Files)</h3>
+            <p>Files &gt; 16KB are split into chunks for WebRTC transfer:</p>
+            <pre><code>{
+  <span class="json-key">"type"</span>: <span class="json-string">"media-chunk"</span>,
+  <span class="json-key">"hash"</span>: <span class="json-string">"a1b2c3d4e5f6g7h8"</span>,
+  <span class="json-key">"index"</span>: <span class="json-number">0</span>,
+  <span class="json-key">"total"</span>: <span class="json-number">10</span>,
+  <span class="json-key">"data"</span>: <span class="json-string">"base64_chunk_data..."</span>
+}</code></pre>
+        </section>
+        
+        <!-- WebRTC Configuration -->
+        <section id="rtc-config">
+            <h2>⚙️ WebRTC Configuration</h2>
+            
+            <h3>ICE Servers</h3>
+            <pre><code>const rtcConfig = {
+  <span class="json-key">iceServers</span>: [
+    <span class="comment">// Public STUN servers (free)</span>
+    { <span class="json-key">urls</span>: <span class="json-string">'stun:stun.l.google.com:19302'</span> },
+    { <span class="json-key">urls</span>: <span class="json-string">'stun:stun1.l.google.com:19302'</span> },
+    
+    <span class="comment">// TURN servers (for NAT traversal)</span>
+    {
+      <span class="json-key">urls</span>: <span class="json-string">'turn:global.relay.metered.ca:80'</span>,
+      <span class="json-key">username</span>: <span class="json-string">'your_username'</span>,
+      <span class="json-key">credential</span>: <span class="json-string">'your_credential'</span>
+    },
+    {
+      <span class="json-key">urls</span>: <span class="json-string">'turn:global.relay.metered.ca:443'</span>,
+      <span class="json-key">username</span>: <span class="json-string">'your_username'</span>,
+      <span class="json-key">credential</span>: <span class="json-string">'your_credential'</span>
+    }
+  ],
+  <span class="json-key">iceCandidatePoolSize</span>: <span class="json-number">10</span>
+};</code></pre>
+            
+            <h3>DataChannel Options</h3>
+            <pre><code>const dataChannel = peerConnection.createDataChannel(<span class="json-string">'p2p-social'</span>, {
+  <span class="json-key">ordered</span>: <span class="json-boolean">true</span>,       <span class="comment">// Guarantee message order</span>
+  <span class="json-key">maxRetransmits</span>: <span class="json-number">3</span>   <span class="comment">// Retry failed sends</span>
+});</code></pre>
+        </section>
+        
+        <footer>
+            <p>
+                <strong>P2P Social Protocol Specification</strong><br>
+                <a href="https://p2p-social.github.io/">p2p-social.github.io</a> • 
+                <a href="https://github.com/p2p-social">GitHub</a>
+            </p>
+            <p style="margin-top: 10px;">
+                Generated November 2024 • Version 2.0.0
+            </p>
+        </footer>
+    </div>
+</body>
+</html>
