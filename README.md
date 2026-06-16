@@ -1,6 +1,9 @@
 # P2P Social
 
 **Decentralized social networking. No servers. No censorship. No cost.**
+https://videotechnology.blogspot.com/2025/11/webrtc-p2p-social-network-prototype.html
+
+https://p2p-social.github.io/docs/talk/
 
 ## 🚀 Quick Start
 
